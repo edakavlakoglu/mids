@@ -1,0 +1,248 @@
+---
+title: "HW week 12"
+author: "Eda Kavlakoglu"
+subtitle: 'w203: Statistics for Data Science'
+
+output:g
+  pdf_document: default
+  html_document: default
+---
+
+```{r load packages, message = FALSE}
+library(tidyverse)
+library(ggplot2) 
+library(sandwich)
+library(stargazer)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r source functions from project, echo = FALSE}
+source('./src/load_and_clean.R')
+source('./src/get_robust_se.R')
+```
+
+```{r load data} 
+d <- load_and_clean(input = 'videos.txt')
+```
+# Regression analysis of YouTube dataset
+
+You want to explain how much the quality of a video affects the number of views it receives on social media. In a world where people can now buy followers and likes, would such an investment increase the number of views that their content receives?  **This is a causal question.** 
+
+You will use a dataset created by Cheng, Dale and Liu at Simon Fraser University.  It includes observations about 9618 videos shared on YouTube.  Please see [this link](http://netsg.cs.sfu.ca/youtubedata/) for details about how the data was collected.
+
+You will use the following variables:
+
+- `views`: the number of views by YouTube users.
+- `average_rating`: This is the average of the ratings that the video received, it is a renamed feature from `rate` that is provided in the original dataset. (Notice that this is different from `cout_of_ratings` which is a count of the total number of ratings that a video has received. 
+- `length:` the duration of the video in seconds.
+
+a. Perform a brief exploratory data analysis on the data to discover patterns, outliers, or wrong data entries and summarize your findings.
+
+```{r conduct EDA in this chunk}
+
+vws <- d %>% 
+  drop_na(views)
+
+vws$log_vws =log(vws$views)
+vws$log_len =log(vws$length)
+
+vw_hist <- vws %>% 
+  ggplot() + 
+  aes(x = log_vws) + 
+  geom_histogram(bins = 15) +
+  scale_x_continuous(name = 'Log of Video Views ($)') + 
+  labs(
+    title    = 'Fig. 1: Distribution of Video Views (with Log Transform)', 
+    subtitle = 'The shape of video view is normally distributed', 
+    y        = 'Count of Videos'
+  ) 
+vw_hist
+```
+
+```{r}
+
+rtg_hist <- vws %>% 
+  ggplot() + 
+  aes(x = average_rating) + 
+  geom_histogram(bins = 10) +
+  scale_x_continuous(name = 'Average Rating') + 
+  labs(
+    title    = 'Fig. 2: Distribution of Average Video Rating', 
+    subtitle = 'While the right tail is more deviated, the shape of video length is well-behaved enough', 
+    y        = 'Count of Videos'
+  ) 
+rtg_hist 
+```
+ 
+```{r}
+len_hist <- vws %>% 
+  ggplot() + 
+  aes(x = log_len) + 
+  geom_histogram(bins = 15) +
+  scale_x_continuous(name = 'Log of Video Length') + 
+  labs(
+    title    = 'Fig. 3: Distribution of Video Length (with Log Transform)', 
+    subtitle = 'The shape of video length is fairly well-behaved', 
+    y        = 'Count of Videos'
+  ) 
+
+len_hist
+```
+```{r}
+vws_len_scatter <- vws %>%
+  ggplot()+
+  aes(x=log_len, y=log_vws) + 
+  scale_x_continuous(name = 'Log of Video Length', labels= scales::comma) + 
+  scale_y_continuous(name = 'Log of Video Views', labels = scales::comma) + 
+  geom_point() +
+  labs(
+    title    = 'Fig. 4: Understanding the relationship between Video Views and Video Length', 
+    subtitle = 'Video Length seems to drop off, suggesting there might be a fixed maximum video length'
+  ) 
+
+vws_len_scatter
+```
+```{r}
+vws_rate_scatter <- vws %>%
+  ggplot()+
+  aes(x=average_rating, y=log_vws) + 
+  scale_x_continuous(name = 'Average Video Rating', labels= scales::comma) + 
+  scale_y_continuous(name = 'Log of Video Views', labels = scales::comma) + 
+  geom_point() +
+  labs(
+    title    = 'Fig. 5: Understanding the relationship between Video Views and Avg. Rating', 
+    subtitle = 'Videos with higher average ratings tend to be viewed more often'
+  ) 
+
+vws_rate_scatter
+```
+> 'What did you learn from your EDA? '
+
+The exploratory data analysis indicates that a few variables, such as views and length are abnormally distributed, and as a result, we should use a transformation to improve the overall distribution. When I apply a log transformation, the data is more well-behaved. 
+
+Additionally, the scatterplot of video views and length indicate that there was probably some kind of limitation around video length, with some exceptions to this rule. A quick Google search indicates that there is currently a video length restriction of 15 minutes; however, this may have differed at the time of data collection. There also seems to be one video with a length of 0, but upon closer inspection within the dataset, a video length of 1 seems to be the minimum value.
+
+Finally, the scatterplot of video views and average video rating illustrates that higher rated videos tend to have higher viewership. 
+
+b. Based on your EDA, select an appropriate variable transformation (if any) to apply to each of your three variables.  You will fit a model of the type,
+
+$$
+  log(\text{views}) = \beta_0 + \beta_1 (\text{rate})  + \beta_3 log(\text{length})
+$$ 
+
+Where $f$, $g$ and $h$ are sensible transformations, which might include making *no* transformation. 
+
+```{r fit a regression model here}
+model <- lm(log_vws ~ average_rating + log_len, data = vws)
+
+stargazer(
+   model, 
+   type = 'text', 
+   se = list(get_robust_se(model))
+   )
+```
+
+
+c. Using diagnostic plots, background knowledge, and statistical tests, assess all five assumptions of the CLM. When an assumption is violated, state what response you will take.  As part of this process, you should decide what transformation (if any) to apply to each variable. Iterate against your model until your satisfied that at least four of the five assumption have been reasonably addressed. 
+
+> 1. **IID Sampling:** 
+'The creators of the dataset note that they used a web crawler to collect data on a set of videos from Youtube's list of "Recently Featured", "Most Viewed", "Top Rated" and "Most Discussed", for "Today", "This Week", "This Month" and "All Time". The creators also note that if a video b is in the related video list (first 20 only) of a video a, then there is a directed edge from a to b, which implies dependency within the dataset. This dependency within the dataset seems to propagate down 4 levels according to the data description. Ultimately, this dependency and categorization of the data by Youtube tells me that this data are not IID.' 
+
+> 2. **No Perfect Colinearity:** 
+'The variables, length and average rating, do not have perfect colinearity, satisfying this CLM assumption. This means that we able to hold the variable, length, constant while the variable, average_rating, increases, and vice versa. We can also expect that the variance will not be inflated; therefore, we shouldn't see blown out standard errors or elevated p-values.' 
+
+```{r}
+car::vif(model)
+```
+According to this [this link](https://www.statology.org/variance-inflation-factor-r/) a value of 1 indicates there is no correlation between a given predictor variable and any other predictor variables in the model.
+
+> 3. **Linear Conditional Expectation:** 'There's no evidence in this data that I have a nonlinear relationship. Based on my observations of the plots below, the residuals look pretty symmetrical around zero with some minimal variance at the tails. This provides no reason for me to believe that the residuals differ significantly from zero, and therefore, I believe that this model satisfies the assumption of a linear conditional expectation. This means that we have some guarantees around our coefficients in this model.'
+
+```{r code and plots assessing linear conditional expectation}
+vws <- vws %>%
+  mutate(
+    model_predictions = predict(model), 
+    model_residuals = resid(model)
+  )
+
+plt <- vws %>%
+  ggplot() + 
+  aes(x = model_predictions, y = model_residuals) + 
+  geom_point() + 
+  stat_smooth() + 
+  scale_x_continuous(name = 'Model Predictions', labels= scales::comma) + 
+  scale_y_continuous(name = 'Model Residuals', labels = scales::comma) + 
+  labs(
+    title    = 'Fig. 6: Understanding the relationship between Model Predictions and Residuals', 
+    subtitle = 'No reason to believe that the residuals differ significantly from zero.'
+  ) 
+
+plt
+
+plt_1 <- vws %>%
+  ggplot(aes(x = average_rating, y = model_residuals)) + 
+  geom_point() + 
+  stat_smooth(method = 'lm') +
+  scale_x_continuous(name = 'Average Rating', labels= scales::comma) + 
+  scale_y_continuous(name = 'Model Residuals', labels = scales::comma)+ 
+  labs(
+    title    = 'Fig. 7: Understanding the relationship between Average Rating and Model Residuals', 
+    subtitle = 'Data is distributed according to our model.'
+  ) 
+
+plt_1
+
+plt_2 <- vws %>%
+  ggplot(aes(x = log_len, y = model_residuals)) + 
+  geom_point() + 
+  stat_smooth(method = 'lm') + 
+  scale_x_continuous(name = 'Log of Video Length', labels= scales::comma) + 
+  scale_y_continuous(name = 'Model Residuals', labels = scales::comma) + 
+  labs(
+    title    = 'Fig. 8: Understanding the relationship between Log of Video Length and Model Residuals', 
+    subtitle = 'Data is distributed according to our model.'
+  ) 
+
+ plt_2
+```
+> 4. **Homoskedastic Errors:** 'If our null hypothesis is that there is no evidence for heteroskedastic variance, then we can reject the null hypothesis based on the results of the Breush-Pagan test. As a result, we should use robust standard errors. Therefore, we do not satisfy the assumption of homoskedastic errors.'
+
+```{r code and plots assessing error variance}
+plt <- vws %>%
+  ggplot() + 
+  aes(x = sort(model_predictions), y = model_residuals) + 
+  geom_point() + 
+  stat_smooth() + 
+  scale_x_continuous(name = 'Model Predictions', labels= scales::comma) + 
+  scale_y_continuous(name = 'Model Residuals', labels = scales::comma) + 
+  labs(
+    title    = 'Fig. 9: Homoskedastic Error Observation', 
+    subtitle = 'There is evidence of heteroskedastic variance'
+  ) 
+
+plt
+lmtest::bptest(model)
+```
+
+> 5. **Normally Distributed Errors:** 'Standard errors appear normally distributed, satisfying the assumption of normally distributed errors.'
+
+```{r code and plots assessing normally distributed errors}
+car::qqPlot(model, main = 'Fig: 10: SEs are normally distributed with some variability at the tails', ylab = 'Residuals', xlab = 'Theoretical Quantiles')
+
+histogram <- vws %>% 
+  ggplot() + 
+  aes(x = model$residuals) + 
+  geom_histogram(bins = 12) +
+  scale_x_continuous(name = 'Model Residuals', labels= scales::comma) + 
+  scale_y_continuous(name = 'Count', labels = scales::comma) + 
+  labs(
+    title    = 'Fig. 11: Distribution of Model Residuals', 
+    subtitle = 'Standard errors appear normally distributed.'
+  ) 
+
+
+histogram
+```

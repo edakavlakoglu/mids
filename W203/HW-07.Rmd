@@ -1,0 +1,307 @@
+---
+title: 'Unit 7 Homework: Tests and and Confidence Intervals'
+author: 'w203: Statistics for Data Science'
+output:
+  pdf_document: default
+  html_document:
+    theme: cosmo
+    highlight: textmate
+    self_contained: yes
+---
+
+```{r package loads, message = FALSE}
+
+## for pdfing
+library(knitr)
+
+## for data wrangling
+library(tidyverse)
+library(magrittr)
+
+## for plotting
+library(ggplot2)
+library(patchwork)
+```
+
+```{r settings}
+theme_set(theme_light())
+```
+
+# Instructions for Submitting 
+
+We have set this document to compile to an `.html` document. These are nice for editing, developing and sharing: they are small, text-only files that render on anybody's computer that has an internet browser.
+
+But, Gradescope doesn't take html files. So, for submitting, please take the following steps for this homework: 
+
+1. Complete all the work in the two questions (and sub-questions) that follow. 
+2. When you are done with your work, open the html file with a web-browser and "Print to PDF" or "Open in PDF" or some other method to convert this file to a PDF that you can submit in Gradescope. Don't worry if you lose the code highlighting styles when you turn it into a PDF. 
+
+# Low-Oxygen Statistics
+
+The data you will be working with this week contains the heights of about 500 mountain peaks and 10,000 climbing expeditions in the Himalayan Mountains of Nepal.  The data was compiled by the Himalayan Database and published in csv format on Tidy Tuesday. 
+
+Before you begin, navigate to the [Tidy Tuesday](https://github.com/rfordatascience/tidytuesday/tree/master/data/2020/2020-09-22) website to read some basic information about the data and examine the codebook.
+
+We are interested in two related questions. These are motivated by a recent discussion within the mountaineering community that was surfaced in an [article](https://www.nytimes.com/interactive/2021/sports/tallest-mountain-summit.html) by John Branch in the New York Times. In short, the question is, 
+
+> "How many people have ever made it to the *true* summit of the 14 peaks in the world that are taller than 8,000 meters?"
+
+Eberhard Jurgalski, who is informally in charge of maintaining this information suspects that perhaps nobody ever has. 
+
+
+# 1. Mountain Height 
+
+You wish to address the following question: **Is the expected height of mountains on Earth above or below 22,000 feet?**
+
+The `peaks` database describes the set of all mountain peaks that meet the inclusion criteria for the Himalayan Database project.  In line with standard approaches, you will regard this set of peaks as a **sample**.
+
+
+### i. Understand the model
+
+In your own words, explain what the **population** is in this context.
+
+> **Population**: Based on the question above, the population is the set of all peaks on Earth.
+
+```{r read data}
+peaks <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-09-22/peaks.csv')
+```
+
+### ii. Explore the data
+
+Complete the code in the cells below to compute the mean height in feet and produce a histogram of height in feet.
+
+```{r summary statement of peak height}
+peaks %>% 
+  mutate(height_feet = peaks$height_metres*3.28084) %>% 
+  summarize(
+    mean_height = mean(height_feet),
+    diff_22000  = 22000 - mean_height)
+```
+
+```{r plot of peak heights}
+peak_height_histogram <- peaks %>% 
+  mutate(height_feet = peaks$height_metres*3.28084) %>% # 'apply the conversion math using *'
+  ggplot() + 
+  aes(x = height_feet) + 
+  geom_histogram(bins = 15) + # Does 30 bins best show the data most effectively?
+  labs(
+    title    = 'Height of Himalyan Peaks', 
+    subtitle = 'Many peaks are just more than 20,000 feet; some are very tall!', 
+    x        = 'Peak Height (Feet)', 
+    y        = 'Count of Observations'
+  ) 
+
+peak_height_histogram
+```
+
+
+### iii. State a null hypothesis and a rejection criteria
+
+Null hypotheses need to be both pertinent to the research question that you are investigating  appropriate for the the statistical test that you will conduct. We think that you will be conducting a one-sample t-test for this question. 
+
+What are appropriate null and alternative hypotheses for this test? 
+
+> **Null Hypothesis**: 'The expected height of mountains on Earth is 22,000 feet.'
+> 
+> **Alternative Hypothesis**: 'The expected height of mountains on Earth is not 22,000 feet.' 
+
+Did you select a one-tailed, or a two-tailed hypothesis? Why? 
+
+>I chose a two-tailed hypothesis test since it's the typically the default method within hypothesis testing. Also, given that we're investigating a somewhat controversial topic within the mountaineering community, I wouldn't want the audience to question whether or not I started with the one-tailed test, as this could be viewed as "cheating". 
+
+What criteria would lead you to reject the null hypothesis? Your rejection criteria could either be stated in terms of a p-value or a test-statistic, although the convention is to state rejection criteria in terms of a p-value. 
+
+> We will reject the null if the p-value is less than 0.05. 
+
+### iv. Evaluate assumptions 
+
+Using the documentation about the data, your background knowledge, and the data itself, assess whether the assumptions underlying a valid t-test are met. This might feel pedantic, but in our experience this is the most difficult and also most important part of practicing data science.
+
+>Assumptions for t-test:
+> 1. Height of peaks is a metric variable.
+> 2. Height of peaks is an IID sample.
+> 3. Height of peaks has a normal distribution.
+
+> 1. Height of peaks is a metric value and satisfies the assumption for a t-test.
+> 2. For this population, I don't think that this sample can be considered an IID sample as the peaks are selected based on a given criteria (i.e. peaks are specific to the Himalayan Mountains of Nepal). Therefore, I believe that this violates the second assumption for a t-test. If we adjust our research question and population to be specific to the Himalayan region, then this test will be valid. 
+> 3. The height of peaks in this sample has a skewed distribution, not a normal one, violating the third assumption of a t-test. However, we do have 500 observations, which means that the sample is large enough for the Central Limit Theorem (CLT) to imply a normal distribution of the mean, allowing this t-test to be asymptotically valid. 
+
+
+### v. Does a t-test reject the null?
+
+The code below conducts a two-tailed t-test for the null hypothesis that the mean height of the sample data is 22,000 feet. Given the results that are printed from this t-test, what do you conclude about your null hypothesis. 
+
+```{r conduct a t-test of the sample vs. 22000}
+t.test(
+  x = peaks$height_metres * 3.28084, 
+  mu = 22000
+)
+```
+
+> Fill this in with your conclusion about the null hypothesis. 
+
+### vi. A t-test, the long way 
+
+What is happening "under the hood" of that t-test? To complete this question, fill in each of the pieces of the function `t_test_by_hand`, and ensure that the function returns values that match what you see reported from the `t.test` function above. 
+
+```{r write t_test_by_hand}
+t_test_by_hand <- function(data_vector, mu, alpha) {
+  ## data_vector is a numeric vector of the data series
+  ## mu is the null hypothesis that you're testing
+  ## alpha is the false positive rate
+
+  sample_mean <- mean(data_vector)
+  sample_sd   <- sd(data_vector)
+  n_obs       <- length(data_vector)
+
+  standard_error <- sample_sd/sqrt(n_obs)
+  t_statistic    <- (sample_mean-mu)/standard_error
+
+  critical_p_vals <- c((alpha/2), (1-(alpha/2)))
+  critical_value  <- qt(p = critical_p_vals, df = n_obs)
+  conf_interval   <- c((sample_mean-(critical_value*standard_error)), (sample_mean+(critical_value*standard_error)))
+
+  ## Fill in the values for `q` and `df` that make this function 
+  ## produce a useful p-value. Also, determine how to make the 
+  ## reported p-value be two-tailed; the starting point that you have received 
+  ## is producing a one-tailed test. 
+  p_value        <- 2*pt(q = t_statistic, df = n_obs-1) 
+
+  test_object <- list(
+    'sample_mean'         = sample_mean,
+    'standard_error'      = standard_error,
+    't_stat'              = t_statistic,
+    'confidence_interval' = conf_interval,
+    'p_value'             = p_value
+  )
+
+  return(test_object)
+}
+```
+
+```{r run the t-test by hand}
+t_test_by_hand(
+  data_vector = peaks$height_metres * 3.28084, 
+  mu = 22000, 
+  alpha = 0.05
+  )
+```
+
+# 2. Taller and then Shorter Ascents 
+
+You next wish to address the following question: **Do mountaineers tend to climb the tallest mountains before shorter mountains?**
+
+For example, we might imagine that the pursuit of fame motivates mountaineers to climb the tallest mountains possible, and then return to "shorter" mountains only after the tallest mountains had been climbed.
+
+### i. Data manipulation and exploration
+
+Because both the year of first ascent and the height of a peak are metric variables, the tests we have learned so far cannot be applied directly.  Later, we will see how to address sitations like this using linear regression.  For now, we will bin height into a binary variable so that a t test can be applied.
+
+Fill in the code below to create a variable that indicates whether a peak is taller than $7000$ meters. This is what we call an indicator variable for the event $\{height>7000\}$. Notice that this is a just a lower-information encoding of the height data that we have been working with.
+
+```{r create a variable indicating tallness}
+peaks <- peaks %>% 
+  mutate(
+    is_taller_than_7000 = height_metres > 7000 # this should produce TRUE and FALSE
+  )
+```
+
+One way you might plot this data is using a histogram. In order to show both the tall and the short plots on the same window, one can use the argument `position=dodge` in the `geom_histogram()` layer.  Complete the cell below to make the histogram complete.
+
+```{r peaks summit date histogram}
+peaks_summit_date_histogram <- peaks %>% 
+  ggplot() + 
+  aes(x = first_ascent_year, fill = is_taller_than_7000) + 
+  geom_histogram(position = 'dodge') + 
+  labs(
+    title    = 'Height of Himalyan Peaks',
+    subtitle = 'Fill this in with the main takeaway of the plot.', 
+    x        = 'year of first ascent',
+    y        = 'count of ascents', 
+    fill     = 'Peaks higher than 7000 metres'
+  )
+
+peaks_summit_date_histogram
+```
+
+When you first plot this does anything stand out to you? (it should!) What seems to be going on? 
+
+```{r weird data investigation}
+head(peaks[order(peaks$first_ascent_year), ])
+```
+
+> There seems to be an outlier between year 0 and 500, which could be a data error. If I run the head function on the dataset, it shows that the first ascent year occurred in 201 on Sharphu II.
+
+What is the appropriate action to take with data of this form? Take the action that you propose and reproduce the plot to make it more informative.
+
+> Reproduce the histogram in a more informative form here.
+
+```{r}
+
+peaks <- filter(peaks, first_ascent_year != 201)
+
+peaks_summit_date_histogram <- peaks %>% 
+  ggplot() + 
+  aes(x = first_ascent_year, fill = is_taller_than_7000) + 
+  geom_histogram(position = 'dodge') + 
+  labs(
+    title    = 'Height of Himalyan Peaks',
+    subtitle = 'Fill this in with the main takeaway of the plot.', 
+    x        = 'year of first ascent',
+    y        = 'count of ascents', 
+    fill     = 'Peaks higher than 7000 metres'
+  )
+
+peaks_summit_date_histogram
+
+```
+
+### ii. State a null hypothesis and a rejection criteria
+
+Null hypotheses need to be both pertinent to the research question that you are investigating  appropriate for the the statistical test that you will conduct. We think that you will be conducting a one-sample t-test for this question. 
+
+What are appropriate null and alternative hypotheses for this test? 
+
+> **Null Hypothesis**: 'The mean year of ascent for the higher mountains (i.e. greater than 7000 metres) is equal to the mean year of ascent the lower mountains (i.e. under 7000 metres).'
+> 
+> **Alternative Hypothesis**: 'The mean year of ascent for the higher mountains (i.e. greater than 7000 metres) is not equal to the mean year of ascent the lower mountains (i.e. under 7000 metres).'
+
+Did you select a one-tailed, or a two-tailed hypothesis? Why? 
+
+> I selected a two-tailed test given that either group could have a higher mean than the other. Beyond the given statement above, I don't have any evidence which suggests that mountaineers pursue the tallest mountains first in the pursuit of fame. Mountaineers could easily pursue "shorter" mountains first to prepare for taller ones. 
+
+What criteria would lead you to reject the null hypothesis? Your rejection criteria could either be stated in terms of a p-value or a test-statistic, although the convention is to state rejection criteria in terms of a p-value. 
+> We will reject the null if the p-value is less than 0.05.  
+
+### iii. T-test assumptions
+
+Using the documentation about the data, your background knowledge, and the data itself, assess whether the assumptions underlying a valid t-test are met. 
+
+>Assumptions for t-test:
+> 1. Year of first ascents for group X and group Y is a metric variable.
+> 2. Group X and Group Y of first ascents are independent of each other.
+> 3. Year of first ascents for groups X and Y are IID samples.
+> 4. Year of first ascents has a normal distribution.
+
+
+> 1. Year of first ascents for both tall and short ascents are metric values and they satisfy the assumption for a t-test.
+> 2. Year of first ascents for both groups are independent of each other.
+> 3. For this population, I don't think that these samples can be considered IID samples as the subset of first ascents are specific to the Himalayan Mountains of Nepal. If we adjust our research question to be more specific to the Himalayan region, then this test will be valid. 
+> 4. Since we have over 30 observations for each sample, the sample is large enough for the Central Limit Theorem (CLT) to imply a normal distribution of the mean, allowing this t-test to be asymptotically valid.
+
+
+### iv. Conduct test
+
+Use the formula interface to `t.test` to conduct the test against data. An example of this formula interface, which is used by many R functions is as follows: `t.test(outcome ~ predictive_feature, data = d)`. 
+
+```{r conduct a t-test for year of first ascent}
+t.test(formula = first_ascent_year~is_taller_than_7000, 
+  data = peaks)
+```
+
+### v. Interpret results
+
+> The data does support the existence of an effect between taller mountains and year of ascent as there is a p-value of 3.287e-10. This is less than 0.05; therefore, we reject the null hypothesis.
+
+> Given that the p-value was very small, we can comfortably state that there is an association between year of ascent and the height of the mountain. The confidence intervals also demonstrate this, showing that 95% of first ascents across both groups occur within an 11.6 to 21.6 year range of each other. We can conclude that we do have initial evidence to support that mountaineers are motivated by fame on first ascents. However, we cannot conclude a causal relationship, only an association.   
+

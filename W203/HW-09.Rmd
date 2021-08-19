@@ -1,0 +1,348 @@
+---
+title: "Unit 09 Homework"
+author: 'Eda Kavlakoglu'
+date: "6/28/2021"
+output: pdf_document
+---
+
+```{r load packages, message = FALSE}
+library(tidyverse)
+library(broom)
+library(patchwork)
+library(sandwich)
+library(lmtest)
+```
+
+# 1. Simulated Data 
+
+For this question, we are going to create data, and then estimate models on this simulated data. This allows us to effectively *know* the population parameters that we are trying to estimate. Consequently, we can reason about how well our models are doing. 
+
+```{r create homoskedastic data function}
+create_homoskedastic_data <- function(n = 100) { 
+  
+  d <- data.frame(id = 1:n) %>% 
+    mutate(
+      x1 = runif(n=n, min=0, max=10), 
+      x2 = rnorm(n=n, mean=10, sd=2), 
+      x3 = rnorm(n=n, mean=0, sd=2), 
+      y  = .5 + 1*x1 + 2*x2 + .25*x3^2 + rnorm(n=n, mean=0, sd=1)
+    )
+  
+  return(d)
+}
+```
+
+```{r create first data}
+d <- create_homoskedastic_data(n=100) 
+```
+
+1. Produce a plot of the distribution of the **outcome data**. This could be a histogram, a boxplot, a density plot, or whatever you think best communicates the distribution of the data. What do you note about this distribution? 
+
+```{r distriution of outcome data}
+outcome_histogram <- d %>% 
+  ggplot() +
+  aes(x = y)+
+  geom_histogram(bins = 12) + 
+  labs(
+    title = 'Histogram of Outcome Variable'
+    )
+
+  outcome_histogram
+```
+
+> "Fill in here: What do you notice about this distribution?" 
+
+The distribution in this sample looks fairly normal when we set the bin number to 12 with an outlier to the right of the plot. The assumptions of the large-sample model are met in that (1) our sample is IID, (2) the data is well-behaved data and large enough to allow CLT to kick in, and (3) unique BLP exists. 
+
+2. Are the assumptions of the large-sample model met so that you can use an OLS regression to produce consistent estimates? 
+
+The large-sample assumptions have been met with this dataset.
+
+1. Estimate two models, called `model_1` and `model_2` that have the following form (The only difference is that the second model has squared $x3$): 
+
+\begin{align} 
+Y &= \beta_{0} + \beta_{1}x_{1} + \beta_{2}x_{2} + \beta_{3}x_{3} + \epsilon \\ 
+Y &= \beta_{0} + \beta_{1}x_{1} + \beta_{2}x_{2} + \beta_{3}x_{3}^{2} + \epsilon
+\end{align}
+
+```{r}
+# if you want to read about specifying statistical models, you can read 
+# here: https://cran.r-project.org/doc/manuals/R-intro.html#Formulae-for-statistical-models'
+# note, using the I() function is preferred over using poly() 
+
+model_1 <- lm(y~ x1 + x2 + x3, data = d)
+model_2 <- lm(y~ x1 + x2 + I(x3^2), data = d)
+```
+
+3. Which of these two models is doing a "better" job estimating the population coefficients? To answer this question, use "better" to mean in terms of the regression sample equivalent to *mean squared error*, mean squared residuals. 
+
+```{r}
+calculate_msr <- function(model) { 
+  # This function takes a model, and uses the `resid` function 
+  # together with the definition of the mse to produce 
+  # the MEAN of the squared errors.
+  
+  msr <- mean((resid(model)^2)) 
+  
+  return(msr)
+} 
+
+calculate_msr(model_1)
+calculate_msr(model_2)
+
+```
+
+> "Fill in here: your assessment of which model is doing better, and why." 
+
+The second model is "doing better" since the MSE is smaller compared to the first model. This means that there will be less variation in our model when making predictions.
+
+4. Now that you've seen producing the MSE by hand, you might consider using function `augment` from the `broom` package. This will create a series of variables that are created from your model, and will attach it back to the data that was used for fitting the model. 
+
+After augmenting your data with these model objects, produce a histograms of the `model_1` and `model_2` residuals. What do you notice about these histograms? 
+
+```{r augment with data from the models}
+# ?broom::augment # if you would like to view the documentation
+d_model_1 <- augment(model_1) 
+d_model_2 <- augment(model_2)
+```
+
+```{r make and plot histograms}
+# if you get a message "Pick a better `binwidth`, do so!" 
+
+model_1_residuals_histogram <- d_model_1 %>%    
+  ggplot() +
+  aes(x = model_1$residuals)+
+  geom_histogram(bins = 12)
+
+  model_2_residuals_histogram <- d_model_2 %>%  
+  ggplot() +
+  aes(x = model_2$residuals)+
+  geom_histogram(bins = 12)
+
+# uncomment the lines below to place histograms using the patchwork library
+#
+  outcome_histogram / 
+  model_1_residuals_histogram / 
+  model_2_residuals_histogram
+```
+
+> "Fill in here: What do you notice about the distribution of the residuals between the `outcome_histogram`, `model_1_residuals_histogram`, and `model_2_residuals_histogram`? 
+
+The distribution of all three histograms look relatively normal.
+
+> What is happening to the *dispersion* of these data series? What is happening to the mean of these data series? Do you remember any of the "Properties of Deviations from the BLP" theorems from Chapter 2? Maybe 2.2.22? How does this compare to Theorem 4.1.5 "Properties of Residuals from the OLS Regression Estimator"? 
+
+Despite the fact that the residuals in both models have a mean close to or equal to 0, the dispersion of the residuals in each model are different. The spread of the residuals in model 1 is greater than the dispersion of the residuals in model 2, meaning that the residual values in model 1 are further from the mean.
+
+The mean results are analogous to Theorem 2.2.22, which states that the expectation of epsilon is equal to zero. Similarly, Theorem 4.1.5 states that residuals have mean zero as one of its properties. The difference between these theorems lies in the fact that Theorem 2.2.22 refers to the population while Theorem 4.1.5 refers to the sample. 
+
+> To the extent that you're able, consider actually producing these statistics for each plot." 
+
+```{r clean up data}
+# Although it isn't necessary, we're going to remove all the data objects that 
+# you have created to this point so that you can start the next section with 
+# clear data. 
+
+rm(d, d_model_1, d_model_2, 
+   model_1,  model_2,
+   model_1_residuals_histogram, model_2_residuals_histogram, outcome_histogram, 
+   create_homoskedastic_data)
+```
+
+
+# 2. Real-World Data 
+
+"Can timely reminders *nudge* people toward increased savings?" Dean Karlan, Margaret McConnell, Sendhil Mullainathan, and Jonathan Zinnman publised a paper in 2016 examining just this question. In this research, the authors recruited people living in Peru, Bolivia, and the Philippines to be a part of an experiment. Among those recruited, a randomly selected subset were sent SMS messages while others were not sent these messages. The authors compare savings rates between these two groups using OLS regressions. 
+
+Please, take the time to read the following sections of the paper, called `./karlan_data/karlan_2016.pdf`. We are asking you to read this to provide context and understanding for the data analysis task. Please, read briefly (take no more than 15-20 minutes for this reading).  
+
+1. The *Abstract*
+2. The first five paragraphs of the *Introduction* (the last paragraph to read begins with, "Although the full pattern of our empirical results suggests..." )
+3. Section 2: *Experimental Design* so you have a sense for where and how these experiments were conducted 
+4. Table 2(a), 2(b), and 2(c) so you have a sense for what the SMS messages said to participants. 
+
+The core results from this study are reported in Table 4. You can read this now, or when you are doing the data work to reproduce parts of Table 4 later in this homework. 
+
+## A. Read the data 
+
+Read in the data using the following code.
+
+```{r}
+d <- haven::read_dta(file = './karlan_data/analysis_dataallcountries.dta')
+glimpse(d)
+```
+
+## B. Conduct an F-test
+
+One of the requirements of a data science experiment is that treatment be randomly assigned to experimental units. One method of assessing whether treatment was randomly assigned is to try and predict the treatment assignment. Here's the intuition: *it should not be possible to predict something random.*
+
+The specifics of the testing method utilize an F-test. Here is how: 
+
+- The data scientist first estimates a model that regresses treatment using only a regression intercept, $Y \sim \beta_{0} + \epsilon_{short}$. In `lm()`, you can estimate this by writing `lm(outcome_variable ~ 1)`, where `outcome_variable` is the outcome that you're actually testing. 
+- Then, the data scientist estimates a model that regresses treatment using all data available on hand, $Y \sim \beta_{0} + \beta_{1}x_{1} + \dots + \beta_{k}x_{k} + \epsilon_{long}$. 
+
+To test whether the long model has explained more of the variance in $Y$ than the short model, the data scientist then conducts an F-test for the long- vs. short-models. 
+
+a. What is the null hypothesis for this F-test between a short- and long-model? 
+
+> The residuals in the short model and the residuals in the long model are not statistically different from one another, or said differently, the additional beta coefficients in the long model are equal to zero. 
+
+b. What criteria would lead you to reject this null hypothesis? 
+
+> I will reject this null hypothesis if the p-value from a test is smaller than 0.05.
+
+c. Using variables that indicate: 
+  i. sex (as noted in the codebook); 
+  ii. age; 
+  iii. high school completion; 
+  iv. wealth; 
+  v. marriage status; 
+  vi. previous formal savings (`saved_formal`, which isn't in the codebook); 
+  vii. weekly income;  
+  viii. meeting savings goals (`saved_asmuch`)
+  ix. and, spend before saving 
+
+  conduct an F-test to evaluate whether there is evidence to call into question whether respondents in the *Philippines* were randomly assigned to receive any reminder (`rem_any`). To do so, you will have to filter/subset the data to include only individuals who live in the Philippines, and then estimate a long- and a short- model.  
+
+```{r conduct F-test}
+phil <- d %>%
+  filter(philippines == 1)
+
+short_model <- lm(rem_any ~ 1, data = phil) 
+long_model  <- lm(rem_any ~ female + age + highschool_completed + wealthy + married + saved_formal + inc_7d + saved_asmuch + spent_b4isaved, data = phil)
+
+# uncomment the line below to conduct the F-test. 
+anova(short_model, long_model, test = "F")
+```
+
+d. Do you reject or fail to reject the null hypothesis? 
+
+> I fail to reject the null hypothesis.
+
+e. What do you conclude from this test? Do the additional covariates increase the model's ability to predict treatment? This is an example of using a "Golem" model for a specific task. 
+
+> There is no evidence that the additional covariates improve the performance of this model. 
+
+## C. Reproduce Table 4
+
+There is **a lot** that is happening in Table 4 of this paper. In this part of the question, you will reproduce some parts of this table. First, reproduce the OLS regression estimates that are in the upper right of Table 4. That is, estimate effects of SMS message on meeting savings goals.
+
+![top_right](./img/top_right.png)
+
+In Section 3.1 of the included paper, the authors describe the OLS model that they estimate: 
+
+$$
+Y_{i} = \alpha + \beta R_{i} + \gamma Z_{i} + \epsilon_{i}
+$$
+
+For the upper right panel that you are estimating, the outcome, $Y_{i}$ is a binary indicator for whether the individual met their savings goal. The indicator $R_{i}$ is a binary indicator for whether the individual was assigned to receive a reminder. And, $Z_{i}$ are additional features: a categorical variable for the country, and a binary indicator for whether the individual was recruited by a marketer. In the model labeled (3) only $Y$, $R$ and $Z$ are used in the regression. In the model labeled (4) these variables are used, but so too are the other variables that you previously used in the F-test. 
+
+a. Examining the data, and any information provided by the authors in the paper, evaluate the assumptions for the large-sample linear model. Are the necessary assumptions met for this regression model to produce consistent estimates (i.e. estimates that converge in probability to the population values)? Why or why not? 
+
+> The necessary assumptions for a large-sample linear model have been met, which include (1) IID sampling and (2) well-behaved data. As indicated in the Experimental Design in section 2, clients were randomly assigned to the reminder treatment as well as the sub-treatments of content and timing within the reminder group. For the second assumption, the number of observations exceeds 30, allowing the Central Limit Theorem to kick in to form a normal distribution. 
+
+b. The authors have concluded that they can conduct these regressions. So, in the next code chunk, please conduct these regressions. First, estimate the model that is reported in model (3). You will have to read the notes below Table 4 to get exactly the correct covariate set that reproduces the reported estimates. Then, estimate the model that is reported in model (4). 
+
+```{r build out regressions}
+
+d2 <- d %>%
+  mutate(
+    marketer_ind = case_when (
+    joint + joint_single + dc + highint + rewardint == 0 ~ 0,
+    joint + joint_single + dc + highint + rewardint != 0 ~ 1
+    ), 
+  zd = case_when(
+      country == 1 & marketer_ind == 0 ~ "Peru, N Marketer",        
+      country == 1 & marketer_ind == 1 ~ "Peru, Y Marketer",         
+      country == 2 & marketer_ind == 0 ~ "Bolivia, N Marketer",       
+      country == 2 & marketer_ind == 1 ~ "Bolivia, Y Marketer",      
+      country == 3 & marketer_ind == 0 ~ "Philippines, N Marketer", 
+      country == 3 & marketer_ind == 1 ~ "Philippines, Y Marketer"  
+    )
+)
+
+model_3 <- lm(reached_b4goal ~ rem_any + zd, data = d2)
+
+model_4 <-lm(reached_b4goal ~ rem_any + zd + female + age + highschool_completed + wealthy + married + saved_formal + inc_7d + saved_asmuch + spent_b4isaved, data = d2) # do I add dept, branch, and province, too? 
+
+summary(model_3)
+summary(model_4)
+```
+
+c. Does the addition of the covariates improve the fit of the model? First, compute the MSE for each model (you can use methods from the first question, either `augment` or `resid`). Then, conduct an F-test to evaluate. 
+
+Yes, the covariates improve the fit of the model. Since the p-value of the F-test is below 0.05, we can reject the null, which is the model 3 (or the reduced model). 
+
+```{r compute MSE for the short and long models; ensure you print these values to the screen}
+calculate_msr(model_3)
+calculate_msr(model_4)
+anova(model_3, model_4, test = "F")
+```
+
+
+```{r test whether covariates improve the model}
+coeftest(model_3, vcovHC)
+coeftest(model_4, vcovHC)
+```
+
+> 'Fill in here: What do you conclude? What was your null hypothesis, what was your rejection criteria, and do you reject or fail to reject? As a result, what do you conclude from this model?' 
+
+The null hypothesis would show that the residuals in model 3 and the residuals in model 4 are not statistically different from one another, or said differently, the additional beta coefficients in model 4 are equal to zero. We reject the null hypothesis since the p-value is less than 0.05, which demonstrates that some of the additional demographic values, like "married", impact the fit of the model. 
+
+d. The authors report that they used Huber-White standard errors. That is to say, they used robust standard errors. Use the function `vcovHC` -- the variance-covariance matrix that is heteroskedastic consistent -- from the `sandwich` package, together with the `coeftest` function from the `lmtest` package to print a table for each of these regressions. 
+```{r print regression tables with robust standard errors} 
+# you can uncomment the following line to conduct a test with robust standard errors
+# 
+coeftest(model_3, vcovHC)
+coeftest(model_4, vcovHC)
+```
+
+e. For each of the coefficients in the table you have just printed, there is a p-value reported: This is a p-value for a hypothesis test that has a null hypothesis. What is the null hypothesis for each of these tests? 
+
+> For each of these tests, we're just evaluating if the estimate is equal to zero. 
+
+f. Suppose that your criteria for rejecting the null hypothesis were: "The p-value must be smaller than 0.05". Then, which of these coefficients rejects that null hypothesis? 
+
+> The following coefficients reject this null hypothesis: rem_any, zdPeru (N Marketer), zdPhilippines (Y Marketer), female, age, wealthy, married, and saved_formal.
+
+g. Interpret the meaning of the coefficient estimated on the `rem_any`. (We will talk about this more in a later unit, but this is the treatment effect from this experiment). 
+
+> Our best guess for the beta coefficient for `rem_any` is 3.2059e-02. While this value is close to zero, the p-value indicates that there is evidence that `rem_any` is different from zero, meaning that this coefficient does help to explain whether or not a client reached their savings goal. 
+
+h. Interpret the meaning of the coefficient estimated on `age`. 
+
+> Our best guess for the beta coefficient for `age` is 1.2774e-03. While this value is close to zero, the p-value indicates that there is evidence that `age` is different from zero, meaning that this coefficient does help to explain whether or not a client reached their savings goal. 
+
+i. Interpret the meaning of the coefficient estimated on  
+
+> Our best guess for the beta coefficient for `highschool_completed` is 1.8547e-03. However, based on the p-value, we can fail to reject the null hypothesis, as it indicates that there is no evidence that `highschool_completed` is different from zero. This means that this coefficient doesn't help to explain whether or not a client reached their savings goal.   
+
+
+j. For the last task on this homework, produce the three models estimated in orange, below. Each of these models are fitted *within* each country. For each, model that you estimate, print the results of the model using `coeftest` and robust standard errors. 
+
+![middle_right](./img/middle_right.png)
+
+```{r estimate country models here}
+
+d_peru = d2 %>% filter(country == 1) %>% mutate(zd = factor(zd))
+d_bolivia = d2 %>% filter(country == 2) %>% mutate(zd = factor(zd))
+d_philippines = d2 %>% filter(country == 3) %>% mutate(zd = factor(zd))
+
+model_peru_no_covariates <- lm(formula = reached_b4goal ~ rem_any, data=d_peru)
+model_bolivia_no_covariates <- lm(formula = reached_b4goal ~ rem_any, data=d_bolivia)
+model_phillippines_no_covariates <- lm(formula = reached_b4goal ~ rem_any, data=d_philippines)
+
+summary(model_peru_no_covariates)
+summary(model_bolivia_no_covariates)
+summary(model_phillippines_no_covariates)
+```
+
+```{r produce reports using robust standard errors}
+coeftest(model_peru_no_covariates)
+coeftest(model_bolivia_no_covariates)
+coeftest(model_phillippines_no_covariates)
+```
+
+k. In which countries is there a statistically significant effect of receiving a reminder? In the countries where there is **not** a statistically significant effect, what do the authors speculate is happening? Given what you see in this data, do you agree with their speculation? 
+
+> 'Fill in here: Which countries are statistically significant, and what is happening in those countries that are not statistically significant?' Bolivia is statistically significant, where the sample size is the largest, but Peru and the Philippines are not. The authors speculate that the lack of statistical significance seems to be due to low power vs. differences across sites. I'd question their speculation given that their point within the "eyeball test" as Bolivia is not statistically significant different from the other sites.

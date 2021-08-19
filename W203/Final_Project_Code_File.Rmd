@@ -1,0 +1,219 @@
+---
+title: "Final Code File"
+author: "Eda Kavlakoglu, Elise Gonzalez, George Roderiguez, Thomas McNeil"
+date: "7/27/2021"
+output: html_document
+---
+
+```{r load packages, message=FALSE}
+install.packages("corrplot")
+
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+library(patchwork)
+library(sandwich)
+library(lmtest)
+library(stargazer)
+library(gridExtra)
+library(corrplot)
+library(grid)
+
+theme_set(theme_minimal())
+knitr::opts_chunk$set(dpi = 300)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r load data}
+
+#load data
+d <- read.csv(file = '/home/jovyan/su_21_central/lab-2-sec_4_get_data_science/data/processed/merged_data2021.csv', header = TRUE)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+#Exploratory Data Analysis 
+
+d$log_hhi =log(d$median_hhi_2019)
+hhi_hist <- d %>% 
+  ggplot() + 
+  aes(x = log_hhi) + 
+  geom_histogram(bins = 10) +
+  scale_x_continuous(name = 'Log of HH Income') + 
+  labs(
+    title    = 'Household Income', 
+    y        = 'Count'
+  ) + 
+  theme(text = element_text(size=8))  +
+  theme(plot.title = element_text(hjust = 0.5))
+
+hhi_hist
+
+d$log_ncases =log(d$new_cases)
+ncases_hist <- d %>% 
+  ggplot() + 
+  aes(x = log_ncases) + 
+  geom_histogram(bins = 10) +
+  scale_x_continuous(name = 'Log of New COVID-19 Cases') + 
+  labs(
+    title    = 'New COVID-19 Cases', 
+    y        = 'Count'
+  ) + 
+  theme(text = element_text(size=8))  +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ncases_hist
+
+d$log_ttrips =log(d$total_trips)
+tt_hist <- d %>% 
+  ggplot() + 
+  aes(x = log_ttrips) + 
+  geom_histogram(bins = 10) +
+  scale_x_continuous(name = 'Log of Total Trips') + 
+  labs(
+    title    = 'Total Trips', 
+    y        = 'Count'
+  ) +
+  theme(text = element_text(size=8))  +
+  theme(plot.title = element_text(hjust = 0.5))
+
+tt_hist
+
+aqi_hist <- d %>% 
+  ggplot() + 
+  aes(x = PM25_AQI) + 
+  geom_histogram(bins = 7) +
+  scale_x_continuous(name = 'PM25 AQI') + 
+  labs(
+    title    = 'PM25 AQI', 
+    y        = 'Count'
+  ) + 
+  theme(text = element_text(size=8))  +
+  theme(plot.title = element_text(hjust = 0.5))
+
+aqi_hist
+
+d$log_rtrips =log(d$trips_to_rainier+1)
+trip_hist <- d %>% 
+  ggplot() + 
+  aes(x = log_rtrips) + 
+  geom_histogram(bins = 7) +
+  scale_x_continuous(name = 'Log of Trips within Range of Mt. Rainier') + 
+  labs(
+    title    = 'Trips that Fall within the Distance Range of Mt. Rainier', 
+    y = 'Count'
+  ) + 
+  theme(text = element_text(size=8)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+trip_hist
+
+d$log_vax =log(d$vaccinations)
+vax_hist <- d %>% 
+  ggplot() + 
+  aes(x = log_vax) + 
+  geom_histogram(bins = 7) +
+  scale_x_continuous(name = 'Log of COVID-19 Vaccinations') + 
+  labs(
+    title = 'COVID-19 Vaccinations', 
+    y = 'Count'
+  ) + 
+  theme(text = element_text(size=8)) + 
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+vax_hist
+```
+
+```{r}
+#summary view of data transformations
+p1 <- hhi_hist
+p2 <- ncases_hist
+p3 <- tt_hist
+p4 <- vax_hist
+p5 <- trip_hist
+p6 <- aqi_hist
+
+#grid.arrange(p1,p2,p3, p4, p5, ncol=3)
+grid.arrange(p1,p2,p3, p4, p5, p6, ncol=3, top=textGrob("Normality Check: Histograms of Model Variables"))
+```
+```{r}
+#understanding correlations between data variables
+ct <- d  %>% 
+  select(log_rtrips, log_vax, log_ncases, log_ttrips, log_hhi, PM25_AQI, voted_rep) 
+
+#plotting a correlogram
+M<-cor(ct)
+head(round(M,2))
+corrplot::corrplot(M, type = "lower")
+corrplot::corrplot(M, method="number")
+
+#checking for multicollinearity
+car::vif(model_2)
+car::vif(model_3)
+car::vif(model_4)
+```
+
+```{r}
+#checking for an interaction effect
+df<- d %>% 
+  drop_na(PM25_AQI) 
+
+vax_scatter <- d %>%
+      mutate(
+    e2020 = case_when(
+      voted_rep == 1 ~ "Trump", 
+      voted_rep == 0 ~ "Biden")) %>% 
+  ggplot()+
+  aes(y=log_vax, x=log_rtrips, color = e2020) + 
+  scale_y_continuous(name = 'Log of Vaccination Count', labels= scales::comma) + 
+  scale_x_continuous(name = 'Log of Trips within Distance of Mt. Rainier', labels = scales::comma) + 
+  geom_point() +
+  geom_smooth(method = "lm", formula = "y~x", se = FALSE) + 
+  labs(
+    title    = 'Observing Road Travel w/i Distance to Mt. Rainier and Vax Status by County', 
+    subtitle = 'Dem counties were more likely to get vaccinated and go on more trips w/i distance to Mt. Rainier', 
+    color = '2020 Election Outcome'
+  ) 
+
+vax_scatter + scale_color_manual(labels = c("Trump", "Biden"), values=c("Trump" = "red", "Biden" = "blue")) 
+```
+
+```{r}
+#statistical models
+
+model_1 <- lm(log_rtrips ~ log_vax, data = d)
+model_2 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + voted_rep, data = d)
+model_3 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + voted_rep + (voted_rep*log_vax), data = d)
+summary(model_1)
+summary(model_2)
+anova(model_1, model_2, test = "F")
+
+
+#add in aqi to model 
+model_4 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + PM25_AQI + voted_rep, data = df)
+model_5 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + PM25_AQI + voted_rep + (voted_rep*log_vax), data = df)
+summary(model_3)
+summary(model_4)
+
+stargazer(
+   model_1, model_2, model_3, model_4,
+   type = 'text', 
+   se = list(get_robust_se(model_1), get_robust_se(model_2), get_robust_se(model_3), get_robust_se(model_4))
+   )
+
+```
+
+
+
+
+
+
+

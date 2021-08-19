@@ -1,0 +1,72 @@
+---
+title: "HW week 11"
+author: "Eda Kavlakoglu"
+subtitle: 'w203: Statistics for Data Science'
+
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Regression analysis of YouTube dataset
+
+You want to explain how much the quality of a video affects the number of views it receives on social media.  **This is a causal question.**
+
+You will use a dataset created by Cheng, Dale and Liu at Simon Fraser University.  It includes observations about 9618 videos shared on YouTube.  Please see [this link](http://netsg.cs.sfu.ca/youtubedata/) for details about how the data was collected.
+
+You will use the following variables:
+
+- views: the number of views by YouTube users.
+
+- rate: the average rating given by users.
+
+- length: the duration of the video in seconds.
+
+You want to use the `rate` variable as a proxy for video quality.  You also include `length` as a control variable.  You estimate the following ols regression:
+
+$$\text{views} =   789 +  2103    \text{ rate} +      3.00 \text{ length} $$
+```{r load packages, message = FALSE}
+library(tidyverse)
+library(broom)
+library(patchwork)
+library(sandwich)
+library(lmtest)
+```
+
+```{r read data}
+yt <- read.table('https://raw.githubusercontent.com/mids-w203/su_21_central/master/homework/unit_11/videos.txt?token=ACGLQPJ357YOILF5IKLZKQTA64MFM', sep="\t", header = TRUE) 
+```
+
+a. Name an omitted variable that you think could induce significant omitted variable bias.  Argue whether the direction of bias is towards zero or away from zero.
+
+``` {r}
+by_cat <- yt %>% group_by(category)
+by_cat %>% summarise(
+  rt = mean(rate),
+  lngth = mean(length))
+```
+
+Category seems to be able to induce significant omitted variable bias into the model. When you average the length of the video content by category, 'Education' and 'Science & Technology' categories are longer in video length. If you had binary variables to account for each category, we'd likely see that certain ones would yield higher video views than others.
+
+Similarly, if we observe the rate variable, we can see that the average user rating also differs by category. The categories, 'UNA', 'Film and Animation', and 'Music' have higher average ratings compared to 'Gaming', 'Science and Technology', and 'Travel & Events'.
+
+Based on the OLS regression formula provided, the current relationship between the independent variables in the model and the dependent variable, ‘views’, is positive. As each unit of rate increases, the number of views increases by 2103, holding all other variables constant. Therefore, videos with higher ratings would produce higher views, which also just intuitively makes sense. The formula also tells us that 'length' has a positive relationship on views, increasing views by 3 for each additional unit in length when all other variables are held constant. 
+
+The direction of the variable bias from the variable, 'category', would likely depend on the category value that we focus on. For example, if we created a binary variable for music-related videos only (which also has the highest count of videos), we'd likely see a positive bias since videos under the category, 'Music', which averages a higher rate compared to other video categories.  
+
+There doesn't seem to be enough evidence to say that the category of 'Music' would bias the relationship of length as its average sits in the middle compared to other categories. If music-related videos bias positively with rate and there's zero bias with length, we can assume that direction of the bias would be away from zero. However, when we consider other categories, this may not always be the case. 
+
+b. Provide a story for why there might be a reverse causal pathway (from the number of views to the average rating).  Argue whether the direction of bias is towards zero or away from zero.
+
+Influencers and social shares can impact the number of views on a given video, causing a video to go 'viral'. As the number of views increases, the average rating could also be positively affected even if there is an overwhelming amount of dislikes on the video. For example, 'Baby Shark Dance' is the third most disliked video on Youtube, with 13 million dislikes. However, it also has 29 million likes.
+
+With both relationships, the direction of the bias is positively biased, or away from zero. As rate increases, views increases, and as views increases, rate increases. 
+
+c. You are considering adding a new variable, `ratings`, which represents the total number of ratings.  Explain how this would affect your measurement goal.
+
+We wouldn't want to add ratings to this model because it would add an outcome variable on the right hand side of our model. We can see this because any movement in ratings would affect rate, preventing us from being able to truly hold all variables constant. As a result, we wouldn't want to do this since it would absorb the causal effect that we want to measure between rate and views. 
+
