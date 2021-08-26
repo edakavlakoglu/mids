@@ -1,13 +1,13 @@
----
 title: "Final Code File"
 author: "Eda Kavlakoglu, Elise Gonzalez, George Roderiguez, Thomas McNeil"
 date: "7/27/2021"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r load packages, message=FALSE}
-install.packages("corrplot")
-
+install.packages("jtools")
 library(tidyverse)
 library(magrittr)
 library(ggplot2)
@@ -18,7 +18,7 @@ library(stargazer)
 library(gridExtra)
 library(corrplot)
 library(grid)
-
+library(jtools)
 theme_set(theme_minimal())
 knitr::opts_chunk$set(dpi = 300)
 ```
@@ -30,9 +30,8 @@ This is an R Markdown document. Markdown is a simple formatting syntax for autho
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
 ```{r load data}
-
 #load data
-d <- read.csv(file = '/home/jovyan/su_21_central/lab-2-sec_4_get_data_science/data/processed/merged_data2021.csv', header = TRUE)
+d <- read.csv(file = '~/W203/merged_data2021.csv', header = TRUE)
 ```
 
 ## Including Plots
@@ -41,7 +40,36 @@ You can also embed plots, for example:
 
 ```{r}
 #Exploratory Data Analysis 
-
+# Change Data
+or_df <-  select(d, c(FIPS, county,total_trips, trips_to_rainier, median_hhi_2019)) %>% 
+  subset(FIPS < 52999) %>% 
+  rename(or_median = median_hhi_2019)
+wa_df <- select(d, c(FIPS, county,total_trips, trips_to_rainier, median_hhi_2019)) %>% 
+  subset(FIPS > 52999) %>% 
+  rename(wa_median = median_hhi_2019)
+# Density Plots
+wa_density <- ggplot(wa_df, aes(x = wa_median)) +
+  geom_histogram(aes(y = ..density..), bins = 15, colour = "black", fill="white", alpha = .2) +
+  geom_density(colour = "blue") +
+  scale_x_continuous(name = 'Income ($)',
+                     labels = scales::dollar) +
+  scale_y_continuous(name = "Count",
+                     labels = scales::label_number(scale = 100000)) +
+  labs(title = "Washington",
+       subtitle = "Larger income distribution around $60k")
+# show plot
+wa_density
+or_density <- ggplot(or_df, aes(x = or_median)) +
+  geom_histogram(aes(y = ..density..), bins = 15, colour = "black", fill = "white", alpha = .2) +
+  geom_density(colour = "blue") +
+  scale_x_continuous(name = 'Income ($)',
+                     labels= scales::dollar) +
+  scale_y_continuous(name = "Count",
+                     labels = scales::label_number(scale = 100000)) +
+  labs(title = "Oregon",
+       subtitle = "Larger income distribution around $50k")
+# show plot
+or_density
 d$log_hhi =log(d$median_hhi_2019)
 hhi_hist <- d %>% 
   ggplot() + 
@@ -54,9 +82,7 @@ hhi_hist <- d %>%
   ) + 
   theme(text = element_text(size=8))  +
   theme(plot.title = element_text(hjust = 0.5))
-
 hhi_hist
-
 d$log_ncases =log(d$new_cases)
 ncases_hist <- d %>% 
   ggplot() + 
@@ -69,9 +95,7 @@ ncases_hist <- d %>%
   ) + 
   theme(text = element_text(size=8))  +
   theme(plot.title = element_text(hjust = 0.5))
-
 ncases_hist
-
 d$log_ttrips =log(d$total_trips)
 tt_hist <- d %>% 
   ggplot() + 
@@ -84,9 +108,7 @@ tt_hist <- d %>%
   ) +
   theme(text = element_text(size=8))  +
   theme(plot.title = element_text(hjust = 0.5))
-
 tt_hist
-
 aqi_hist <- d %>% 
   ggplot() + 
   aes(x = PM25_AQI) + 
@@ -98,9 +120,7 @@ aqi_hist <- d %>%
   ) + 
   theme(text = element_text(size=8))  +
   theme(plot.title = element_text(hjust = 0.5))
-
 aqi_hist
-
 d$log_rtrips =log(d$trips_to_rainier+1)
 trip_hist <- d %>% 
   ggplot() + 
@@ -113,9 +133,7 @@ trip_hist <- d %>%
   ) + 
   theme(text = element_text(size=8)) +
   theme(plot.title = element_text(hjust = 0.5))
-
 trip_hist
-
 d$log_vax =log(d$vaccinations)
 vax_hist <- d %>% 
   ggplot() + 
@@ -128,7 +146,6 @@ vax_hist <- d %>%
   ) + 
   theme(text = element_text(size=8)) + 
   theme(plot.title = element_text(hjust = 0.5)) 
-
 vax_hist
 ```
 
@@ -140,7 +157,6 @@ p3 <- tt_hist
 p4 <- vax_hist
 p5 <- trip_hist
 p6 <- aqi_hist
-
 #grid.arrange(p1,p2,p3, p4, p5, ncol=3)
 grid.arrange(p1,p2,p3, p4, p5, p6, ncol=3, top=textGrob("Normality Check: Histograms of Model Variables"))
 ```
@@ -148,24 +164,17 @@ grid.arrange(p1,p2,p3, p4, p5, p6, ncol=3, top=textGrob("Normality Check: Histog
 #understanding correlations between data variables
 ct <- d  %>% 
   select(log_rtrips, log_vax, log_ncases, log_ttrips, log_hhi, PM25_AQI, voted_rep) 
-
 #plotting a correlogram
 M<-cor(ct)
 head(round(M,2))
 corrplot::corrplot(M, type = "lower")
 corrplot::corrplot(M, method="number")
-
-#checking for multicollinearity
-car::vif(model_2)
-car::vif(model_3)
-car::vif(model_4)
 ```
 
 ```{r}
 #checking for an interaction effect
 df<- d %>% 
   drop_na(PM25_AQI) 
-
 vax_scatter <- d %>%
       mutate(
     e2020 = case_when(
@@ -182,38 +191,188 @@ vax_scatter <- d %>%
     subtitle = 'Dem counties were more likely to get vaccinated and go on more trips w/i distance to Mt. Rainier', 
     color = '2020 Election Outcome'
   ) 
-
 vax_scatter + scale_color_manual(labels = c("Trump", "Biden"), values=c("Trump" = "red", "Biden" = "blue")) 
 ```
 
 ```{r}
 #statistical models
-
 model_1 <- lm(log_rtrips ~ log_vax, data = d)
 model_2 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + voted_rep, data = d)
 model_3 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + voted_rep + (voted_rep*log_vax), data = d)
 summary(model_1)
 summary(model_2)
 anova(model_1, model_2, test = "F")
-
-
 #add in aqi to model 
 model_4 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + PM25_AQI + voted_rep, data = df)
 model_5 <- lm(log_rtrips ~ log_ttrips + log_vax + log_ncases + log_hhi + PM25_AQI + voted_rep + (voted_rep*log_vax), data = df)
 summary(model_3)
 summary(model_4)
-
 stargazer(
    model_1, model_2, model_3, model_4,
    type = 'text', 
    se = list(get_robust_se(model_1), get_robust_se(model_2), get_robust_se(model_3), get_robust_se(model_4))
    )
+```
 
+```{r plot of log trips vs log vax}
+# NOTE: excludes county with highest number of visits AND county with highest number of vaccinations (distinct)
+trip_vax_plot <- d %>%
+  ggplot() + 
+  aes(x = log(vaccinations), y = log(trips_to_rainier)) +
+  geom_point() + geom_smooth() +
+  labs(
+    title = "Trips to Mount Rainier NP vs. Vaccinations",
+    subtitle = "Positive correlation between park visits and county vaccinations",
+    y = "Log of Trips to Mount Rainier NP",
+    x = "Log of Vaccinations in County") 
+trip_vax_plot
+cor.test(d$trips_to_rainier, d$vaccinations)
+```
+
+```{r vaccination pct plots}
+#data transformation prior to creating plots
+vax_df <- d
+vax_df$population_estimate <- gsub(",","",vax_df$population_estimate)
+vax_df$population_estimate <- as.numeric(vax_df$population_estimate)
+vax_df$vax_pct <- vax_df$vaccinations / vax_df$population_estimate
+oregon <- filter(vax_df, grepl("41", FIPS, fixed = TRUE))
+oregon <- oregon[-c(37), ]
+wash <- filter(vax_df, grepl("53", FIPS, fixed = TRUE))
+wash <- wash[-c(1), ]
+#creating plots
+wa_pct_plot <- wash %>%
+  ggplot() + 
+  aes(reorder(county, -vax_pct, sum), vax_pct, fill = voted_rep>0) +
+  scale_y_continuous(labels = scales::percent) +
+  geom_bar(stat="identity", alpha = .5) +
+  #theme(axis.text.x = element_text(size = 11))+
+  #scale_x_discrete(guide = guide_axis(check.overlap = TRUE))+
+  labs(
+    title = "Washington Vaccination Percentage by County",
+    y = "Vaccination Percentage",
+    x = "County",
+    fill = "2020 Election Outcome"
+    ) + 
+  scale_fill_manual(labels = c("Trump", "Biden"), values=c("TRUE" = "red", "FALSE" = "blue")) 
+wa_pct_plot + coord_flip()
+or_pct_plot <- oregon %>%
+  ggplot() +
+  #aes(y = vax_pct, x = county, ) + 
+  aes(reorder(county, -vax_pct, sum), vax_pct, fill = voted_rep>0) +
+  scale_y_continuous(labels = scales::percent) +
+  geom_bar(stat="identity", alpha = .5) +
+  labs(
+    title = "Oregon Vaccination Percentage by County",
+    y = "Vaccination Percentage",
+    x = "County",
+    fill = "2020 Election Outcome"
+    ) + 
+  scale_fill_manual(labels = c("Trump", "Biden"), values=c("TRUE" = "red", "FALSE" = "blue")) 
+or_pct_plot + coord_flip()
 ```
 
 
 
 
+# CLM Assumptions
 
+```{r linear conditional expectation}
+model_4_predictions <- predict(model_4)
+model_3_predictions <- predict(model_3)
+model_2_predictions <- predict(model_2)
+model_1_predictions <- predict(model_1)
+model_1_residuals <- resid(model_1)
+model_2_residuals <- resid(model_2)
+model_3_residuals <- resid(model_3)
+model_4_residuals <- resid(model_4)
+resid_plot_1 <- ggplot() +
+  aes(x = model_1_predictions, y = model_1_residuals) + 
+  geom_point() + stat_smooth() + 
+  labs(
+    title = "Model 1",
+    x = "Predictions",
+    y = "Residuals"
+  )
+resid_plot_1
+resid_plot_2 <- ggplot() +
+  aes(x = model_2_predictions, y = model_2_residuals) + 
+  geom_point() + stat_smooth() + 
+  labs(
+    title = "Model 2",
+    x = "Predictions",
+    y = "Residuals"
+  )
+resid_plot_2
+resid_plot_3 <- ggplot() +
+  aes(x = model_3_predictions, y = model_3_residuals) + 
+  geom_point() + stat_smooth() + 
+  labs(
+    title = "Model 3",
+    x = "Predictions",
+    y = "Residuals"
+  )
+resid_plot_3
+resid_plot_4 <- ggplot() +
+  aes(x = model_4_predictions, y = model_4_residuals) + 
+  geom_point() + stat_smooth() + 
+  labs(
+    title = "Model 4",
+    x = "Predictions",
+    y = "Residuals"
+  )
+resid_plot_4
+grid.arrange(resid_plot_1, resid_plot_2, resid_plot_3, resid_plot_4, ncol=4, top=textGrob("Residuals vs. Predictions of 4 Models"))
+```
 
+```{r multicollinearity}
+summary(model_1)
+summary(model_2)
+summary(model_3)
+summary(model_4) 
+```
 
+```{r vif, multicollinearity}
+library(car)
+vif(model_2)
+vif(model_3)
+vif(model_4)
+```
+
+```{r homoskedastic conditional variance}
+lmtest::bptest(model_1)
+lmtest::bptest(model_2)
+lmtest::bptest(model_3)
+lmtest::bptest(model_4)
+```
+
+```{r normally distributed errors}
+norm_errors_1 <- ggplot(model_1, aes(x = model_1_residuals)) +
+  geom_histogram(aes(y = ..density..), bins = 15, colour = "red", fill = "red", alpha = .2) +
+  geom_density(colour = "blue") +
+  labs(title = "Model 1",
+       x = "Residuals", 
+      y = "Density")
+norm_errors_1
+norm_errors_2 <- ggplot(model_2, aes(x = model_2_residuals)) +
+  geom_histogram(aes(y = ..density..), bins = 15, colour = "red", fill = "red", alpha = .2) +
+  geom_density(colour = "blue") +
+  labs(title = "Model 2",
+       x = "Residuals",
+       y = "")
+  norm_errors_2
+norm_errors_3 <- ggplot(model_3, aes(x = model_3_residuals)) +
+  geom_histogram(aes(y = ..density..), bins = 15, colour = "red", fill = "red", alpha = .2) +
+  geom_density(colour = "blue") +
+  labs(title = "Model 3",
+       x = "Residuals",
+       y = "")
+norm_errors_3
+norm_errors_4 <- ggplot(model_4, aes(x = model_4_residuals)) +
+  geom_histogram(aes(y = ..density..), bins = 15, colour = "red", fill = "red", alpha = .2) +
+  geom_density(colour = "blue") +
+  labs(title = "Model 4",
+       x = "Residuals",
+       y = "")
+norm_errors_4
+grid.arrange(norm_errors_1, norm_errors_2, norm_errors_3, norm_errors_4, ncol=4, top=textGrob("Error Distributions of 4 Models"))
+```
