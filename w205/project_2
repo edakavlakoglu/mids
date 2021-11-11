@@ -1,0 +1,940 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "collapsed": true
+   },
+   "source": [
+    "# Executive Summary"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "The purpose of this project is to prepare the infrastructure for a service that delivers assessments. This involves the following tasks:\n",
+    "- publishing and consuming messages with Kafka \n",
+    "- using Spark to transform messages \n",
+    "- landing messages within HDFS\n",
+    "\n",
+    "The file, \"assessment-attempts-20180128-121051-nested.json\", is provided and upon exploration, the data shows the following issues:\n",
+    " - binary values \n",
+    " - a nested array (i.e. nested lists and nested dictionaries)\n",
+    "\n",
+    "We seek to answer the following business questions: \n",
+    "1. How many assessments are in the dataset?\n",
+    "2. What is the least common course taken? And the most common?\n",
+    "3. What is the average assessment score for the top 5 most popular courses?\n",
+    "\n",
+    "We cast the raw assessments data as a string to address the binary values, and then we unroll the JSON file to answer the third business question above. After we completed these transformations, we were able to answer the above business questions: \n",
+    "\n",
+    "1. 3242 assessments are in the dataset\n",
+    "\n",
+    "2. Native Web Apps for Android, Learning to Visualize Data with D3.js, Nulls, Three-valued Logic and Missing Information, and Operating Red Hat Enterprise Linux Servers are the least popular courses, with only one single assessment for each course. Learning Git is the most popular course with 390 assessments from distinct users.  \n",
+    "\n",
+    "3. The top 5 most popular courses had the following average assessment scores: \n",
+    "     - Learning Git: 67.6142131979696 \n",
+    "     - Introduction to Python: 56.66666666666664\n",
+    "     - Introduction to Java 8: 87.59493670886073\n",
+    "     - Intermediate Python Programming: 51.26582278481012\n",
+    "     - Learning to Program with R: 54.46428571428569\n",
+    "\n",
+    "Finally, all dataframes were published to HDFS. "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Part 1: Linux Commands - Setup \n",
+    "\n",
+    "### The following commands are executed once:\n",
+    "\n",
+    "##### set up project directory and branches\n\n",
+    "ls \n\n",
+    
+    "cd w205\n\n",
+    
+    "git clone https://github.com/mids-w205-martin-mims/project-2-edakavlakoglu.git\n\n",
+    
+    "cd project-2-edakavlakoglu\n\n",
+    
+    "git branch assignment\n\n",
+    
+    "git checkout assignment\n\n",
+    "\n",
+    "##### copy yml file in project directory \n\n",
+    "\n",
+    "cp ~/w205/course-content/08-Querying-Data/docker-compose.yml .\n\n",
+    "\n",
+    "##### modify yml file for juptyer notebook then check modifications\n",
+    "\n",
+    "cat docker-compose.yml\n\n",
+    "\n",
+    "##### download assessments file\n\n",
+    "\n",
+    "curl -L -o assessment-attempts-20180128-121051-nested.json https://goo.gl/ME6hjp\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### The following commands are executed every time I start a cluster:\n",
+    "\n",
+    "##### check for old containers \n",
+    "\n",
+    "docker ps -a \n",
+    "\n",
+    "##### start up cluster \n",
+    "\n",
+    "docker-compose up -d\n",
+    "docker-compose ps\n",
+    "\n",
+    "##### execute a bash shell in spark container\n",
+    "docker-compose exec spark bash\n",
+    "\n",
+    "##### create symbolic link in spark container \n",
+    "ln -s /w205 w205\n",
+    "\n",
+    "##### exit container \n",
+    "exit \n",
+    "\n",
+    "##### run a jupyter notebook with pyspark kernel \n",
+    "\n",
+    "docker-compose exec spark env PYSPARK_DRIVER_PYTHON=jupyter PYSPARK_DRIVER_PYTHON_OPTS='notebook --no-browser --port 8888 --ip 0.0.0.0 --allow-root' pyspark\n",
+    "\n",
+    "##### check jupyter notebook exists \n",
+    " \n",
+    " ls\n",
+    "\n",
+    "##### create topic assessments \n",
+    "\n",
+    " docker-compose exec kafka \\\n",
+    "  kafka-topics \\\n",
+    "    --create \\\n",
+    "    --topic assessments \\\n",
+    "    --partitions 1 \\\n",
+    "    --replication-factor 1 \\\n",
+    "    --if-not-exists \\\n",
+    "    --zookeeper zookeeper:32181\n",
+    "\n",
+    "##### publish assessments to kafka\n",
+    "\n",
+    "docker-compose exec mids bash -c \"cat /w205/project-2-edakavlakoglu/assessment-attempts-20180128-121051-nested.json | jq '.[]' -c | kafkacat -P -b kafka:29092 -t assessments\"\n",
+    "\n",
+    "##### check assessments published to kafka \n",
+    "\n",
+    "docker-compose exec mids bash -c \"kafkacat -C -b kafka:29092 -t assessments -o beginning -e\"\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Part 2: Exploring JSON file via JQ and Spark SQL"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 282,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "import json\n",
+    "import pprint\n",
+    "from pyspark.sql import Row "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 283,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "\n",
+       "            <div>\n",
+       "                <p><b>SparkSession - hive</b></p>\n",
+       "                \n",
+       "        <div>\n",
+       "            <p><b>SparkContext</b></p>\n",
+       "\n",
+       "            <p><a href=\"http://172.20.0.6:4040\">Spark UI</a></p>\n",
+       "\n",
+       "            <dl>\n",
+       "              <dt>Version</dt>\n",
+       "                <dd><code>v2.2.0</code></dd>\n",
+       "              <dt>Master</dt>\n",
+       "                <dd><code>local[*]</code></dd>\n",
+       "              <dt>AppName</dt>\n",
+       "                <dd><code>PySparkShell</code></dd>\n",
+       "            </dl>\n",
+       "        </div>\n",
+       "        \n",
+       "            </div>\n",
+       "        "
+      ],
+      "text/plain": [
+       "<pyspark.sql.session.SparkSession at 0x7f1be15a44e0>"
+      ]
+     },
+     "execution_count": 283,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#check if spark object is there \n",
+    "spark"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 284,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "\n",
+       "        <div>\n",
+       "            <p><b>SparkContext</b></p>\n",
+       "\n",
+       "            <p><a href=\"http://172.20.0.6:4040\">Spark UI</a></p>\n",
+       "\n",
+       "            <dl>\n",
+       "              <dt>Version</dt>\n",
+       "                <dd><code>v2.2.0</code></dd>\n",
+       "              <dt>Master</dt>\n",
+       "                <dd><code>local[*]</code></dd>\n",
+       "              <dt>AppName</dt>\n",
+       "                <dd><code>PySparkShell</code></dd>\n",
+       "            </dl>\n",
+       "        </div>\n",
+       "        "
+      ],
+      "text/plain": [
+       "<SparkContext master=local[*] appName=PySparkShell>"
+      ]
+     },
+     "execution_count": 284,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# check if sc is there\n",
+    "sc"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 285,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "#read assessments from kafka\n",
+    "\n",
+    "raw_assessments = spark \\\n",
+    "  .read \\\n",
+    "  .format(\"kafka\") \\\n",
+    "  .option(\"kafka.bootstrap.servers\", \"kafka:29092\") \\\n",
+    "  .option(\"subscribe\",\"assessments\") \\\n",
+    "  .option(\"startingOffsets\", \"earliest\") \\\n",
+    "  .option(\"endingOffsets\", \"latest\") \\\n",
+    "  .load() "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 286,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "DataFrame[key: binary, value: binary, topic: string, partition: int, offset: bigint, timestamp: timestamp, timestampType: int]"
+      ]
+     },
+     "execution_count": 286,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#cache to cut back on warnings \n",
+    "raw_assessments.cache()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 287,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- key: binary (nullable = true)\n",
+      " |-- value: binary (nullable = true)\n",
+      " |-- topic: string (nullable = true)\n",
+      " |-- partition: integer (nullable = true)\n",
+      " |-- offset: long (nullable = true)\n",
+      " |-- timestamp: timestamp (nullable = true)\n",
+      " |-- timestampType: integer (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#print schema\n",
+    "raw_assessments.printSchema()\n",
+    "\n",
+    "#note: value is in binary format"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 288,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+----+--------------------+-----------+---------+------+--------------------+-------------+\n",
+      "| key|               value|      topic|partition|offset|           timestamp|timestampType|\n",
+      "+----+--------------------+-----------+---------+------+--------------------+-------------+\n",
+      "|null|[7B 22 6B 65 65 6...|assessments|        0|     0|1969-12-31 23:59:...|            0|\n",
+      "|null|[7B 22 6B 65 65 6...|assessments|        0|     1|1969-12-31 23:59:...|            0|\n",
+      "|null|[7B 22 6B 65 65 6...|assessments|        0|     2|1969-12-31 23:59:...|            0|\n",
+      "|null|[7B 22 6B 65 65 6...|assessments|        0|     3|1969-12-31 23:59:...|            0|\n",
+      "|null|[7B 22 6B 65 65 6...|assessments|        0|     4|1969-12-31 23:59:...|            0|\n",
+      "+----+--------------------+-----------+---------+------+--------------------+-------------+\n",
+      "only showing top 5 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#show raw assessments data\n",
+    "raw_assessments.show(5)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 289,
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "IndentationError",
+     "evalue": "unexpected indent (<ipython-input-289-8363a431a3a1>, line 2)",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;36m  File \u001b[0;32m\"<ipython-input-289-8363a431a3a1>\"\u001b[0;36m, line \u001b[0;32m2\u001b[0m\n\u001b[0;31m    assessments = raw_assessments.select(raw_assessments.value.cast('string'))\u001b[0m\n\u001b[0m    ^\u001b[0m\n\u001b[0;31mIndentationError\u001b[0m\u001b[0;31m:\u001b[0m unexpected indent\n"
+     ]
+    }
+   ],
+   "source": [
+    "#Convert the `value` as string\n",
+    "    assessments = raw_assessments.select(raw_assessments.value.cast('string'))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#check that data is no longer in binary format\n",
+    "assessments.show(5)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "extracted_assessments = assessments.rdd.map(lambda x: json.loads(x.value)).toDF()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#print schema\n",
+    "extracted_assessments.printSchema()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#didn't run, but can use pretty print instead to examine nested data\n",
+    "cat assessment-attempts-20180128-121051-nested.json | jq '.[]' -c | head -1 | jq ."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 290,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "{\n",
+      " \"keen_timestamp\": \"1516717442.735266\",\n",
+      " \"max_attempts\": \"1.0\",\n",
+      " \"started_at\": \"2018-01-23T14:23:19.082Z\",\n",
+      " \"base_exam_id\": \"37f0a30a-7464-11e6-aa92-a8667f27e5dc\",\n",
+      " \"user_exam_id\": \"6d4089e4-bde5-4a22-b65f-18bce9ab79c8\",\n",
+      " \"sequences\": {\n",
+      "  \"questions\": [\n",
+      "   {\n",
+      "    \"user_incomplete\": true,\n",
+      "    \"user_correct\": false,\n",
+      "    \"options\": [\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:23:24.670Z\",\n",
+      "      \"id\": \"49c574b4-5c82-4ffd-9bd1-c3358faf850d\",\n",
+      "      \"submitted\": 1,\n",
+      "      \"correct\": true\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:23:25.914Z\",\n",
+      "      \"id\": \"f2528210-35c3-4320-acf3-9056567ea19f\",\n",
+      "      \"submitted\": 1,\n",
+      "      \"correct\": true\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"correct\": true,\n",
+      "      \"id\": \"d1bf026f-554f-4543-bdd2-54dcf105b826\"\n",
+      "     }\n",
+      "    ],\n",
+      "    \"user_submitted\": true,\n",
+      "    \"id\": \"7a2ed6d3-f492-49b3-b8aa-d080a8aad986\",\n",
+      "    \"user_result\": \"missed_some\"\n",
+      "   },\n",
+      "   {\n",
+      "    \"user_incomplete\": false,\n",
+      "    \"user_correct\": false,\n",
+      "    \"options\": [\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:23:30.116Z\",\n",
+      "      \"id\": \"a35d0e80-8c49-415d-b8cb-c21a02627e2b\",\n",
+      "      \"submitted\": 1\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"correct\": true,\n",
+      "      \"id\": \"bccd6e2e-2cef-4c72-8bfa-317db0ac48bb\"\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:23:41.791Z\",\n",
+      "      \"id\": \"7e0b639a-2ef8-4604-b7eb-5018bd81a91b\",\n",
+      "      \"submitted\": 1,\n",
+      "      \"correct\": true\n",
+      "     }\n",
+      "    ],\n",
+      "    \"user_submitted\": true,\n",
+      "    \"id\": \"bbed4358-999d-4462-9596-bad5173a6ecb\",\n",
+      "    \"user_result\": \"incorrect\"\n",
+      "   },\n",
+      "   {\n",
+      "    \"user_incomplete\": false,\n",
+      "    \"user_correct\": true,\n",
+      "    \"options\": [\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"at\": \"2018-01-23T14:23:52.510Z\",\n",
+      "      \"id\": \"a9333679-de9d-41ff-bb3d-b239d6b95732\"\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"id\": \"85795acc-b4b1-4510-bd6e-41648a3553c9\"\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:23:54.223Z\",\n",
+      "      \"id\": \"c185ecdb-48fb-4edb-ae4e-0204ac7a0909\",\n",
+      "      \"submitted\": 1,\n",
+      "      \"correct\": true\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:23:53.862Z\",\n",
+      "      \"id\": \"77a66c83-d001-45cd-9a5a-6bba8eb7389e\",\n",
+      "      \"submitted\": 1,\n",
+      "      \"correct\": true\n",
+      "     }\n",
+      "    ],\n",
+      "    \"user_submitted\": true,\n",
+      "    \"id\": \"e6ad8644-96b1-4617-b37b-a263dded202c\",\n",
+      "    \"user_result\": \"correct\"\n",
+      "   },\n",
+      "   {\n",
+      "    \"user_incomplete\": false,\n",
+      "    \"user_correct\": true,\n",
+      "    \"options\": [\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"id\": \"59b9fc4b-f239-4850-b1f9-912d1fd3ca13\"\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"id\": \"2c29e8e8-d4a8-406e-9cdf-de28ec5890fe\"\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": false,\n",
+      "      \"id\": \"62feee6e-9b76-4123-bd9e-c0b35126b1f1\"\n",
+      "     },\n",
+      "     {\n",
+      "      \"checked\": true,\n",
+      "      \"at\": \"2018-01-23T14:24:00.807Z\",\n",
+      "      \"id\": \"7f13df9c-fcbe-4424-914f-2206f106765c\",\n",
+      "      \"submitted\": 1,\n",
+      "      \"correct\": true\n",
+      "     }\n",
+      "    ],\n",
+      "    \"user_submitted\": true,\n",
+      "    \"id\": \"95194331-ac43-454e-83de-ea8913067055\",\n",
+      "    \"user_result\": \"correct\"\n",
+      "   }\n",
+      "  ],\n",
+      "  \"attempt\": 1,\n",
+      "  \"id\": \"5b28a462-7a3b-42e0-b508-09f3906d1703\",\n",
+      "  \"counts\": {\n",
+      "   \"incomplete\": 1,\n",
+      "   \"submitted\": 4,\n",
+      "   \"incorrect\": 1,\n",
+      "   \"all_correct\": false,\n",
+      "   \"correct\": 2,\n",
+      "   \"total\": 4,\n",
+      "   \"unanswered\": 0\n",
+      "  }\n",
+      " },\n",
+      " \"keen_created_at\": \"1516717442.735266\",\n",
+      " \"certification\": \"false\",\n",
+      " \"keen_id\": \"5a6745820eb8ab00016be1f1\",\n",
+      " \"exam_name\": \"Normal Forms and All That Jazz Master Class\"\n",
+      "}\n"
+     ]
+    }
+   ],
+   "source": [
+    "#view json data using pretty print\n",
+    "\n",
+    "with open(\"assessment-attempts-20180128-121051-nested.json\",\"r\") as json_file:\n",
+    "    json_data = json.load(json_file)\n",
+    "\n",
+    "print(json.dumps(json_data[0], indent=1))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 291,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+--------------------+\n",
+      "|             keen_id|\n",
+      "+--------------------+\n",
+      "|5a6745820eb8ab000...|\n",
+      "|5a674541ab6b0a000...|\n",
+      "|5a67999d3ed3e3000...|\n",
+      "|5a6799694fc7c7000...|\n",
+      "|5a6791e824fccd000...|\n",
+      "+--------------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#create a temp table for assessments dataframe to execute Spark SQL  \n",
+    "extracted_assessments.registerTempTable('assessments')\n",
+    "spark.sql(\"select keen_id from assessments limit 5\").show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Part 3: Answering Business Questions Using Spark SQL "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### 1. How many assessments are in the dataset?"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 292,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+----------------+\n",
+      "|assessment_count|\n",
+      "+----------------+\n",
+      "|            3242|\n",
+      "+----------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "spark.sql(\"select count(distinct keen_id) as assessment_count from assessments limit 5\").show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### 2. What is the least common course taken? And the most common?"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 293,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+-------------------------------------------------+----------------------------+\n",
+      "|course                                           |count(DISTINCT user_exam_id)|\n",
+      "+-------------------------------------------------+----------------------------+\n",
+      "|Native Web Apps for Android                      |1                           |\n",
+      "|Learning to Visualize Data with D3.js            |1                           |\n",
+      "|Nulls, Three-valued Logic and Missing Information|1                           |\n",
+      "|Operating Red Hat Enterprise Linux Servers       |1                           |\n",
+      "|Learning Spring Programming                      |2                           |\n",
+      "+-------------------------------------------------+----------------------------+\n",
+      "only showing top 5 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#least popular courses\n",
+    "spark.sql(\"select exam_name as course, count(distinct user_exam_id) from assessments group by exam_name order by 2 asc\").show(5, False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 294,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+------------+----------------------------+\n",
+      "|      course|count(DISTINCT user_exam_id)|\n",
+      "+------------+----------------------------+\n",
+      "|Learning Git|                         390|\n",
+      "+------------+----------------------------+\n",
+      "only showing top 1 row\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#most popular course\n",
+    "spark.sql(\"select exam_name as course, count(distinct user_exam_id) from assessments group by exam_name order by 2 desc\").show(1)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### 3. What is the average assessment score for the top 5 most popular courses?"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 295,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def extract_assessment_dtls_from_json(row):\n",
+    "    assessments = json.loads(row.value)\n",
+    "    assessment_scores = []\n",
+    "    \n",
+    "    if \"sequences\" in assessments.keys():\n",
+    "        if \"counts\" in assessments[\"sequences\"].keys():\n",
+    "            if \"correct\" in assessments[\"sequences\"][\"counts\"].keys() and \"total\" in assessments[\"sequences\"][\"counts\"].keys():\n",
+    "                score_row = {\"course\": assessments[\"exam_name\"],\n",
+    "                             \"user_id\": assessments[\"user_exam_id\"],\n",
+    "                             \"correct\": assessments[\"sequences\"][\"counts\"][\"correct\"],\n",
+    "                             \"total\": assessments[\"sequences\"][\"counts\"][\"total\"], \n",
+    "                             \"score\": assessments[\"sequences\"][\"counts\"][\"correct\"]/assessments[\"sequences\"][\"counts\"][\"total\"]\n",
+    "                            }\n",
+    "        \n",
+    "            assessment_scores.append(Row(**score_row))\n",
+    "        \n",
+    "    return assessment_scores\n",
+    "\n",
+    "assessmnt_dtls = assessments.rdd.flatMap(extract_assessment_dtls_from_json).toDF()\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 296,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+-------+--------------------+-----+-----+--------------------+\n",
+      "|correct|              course|score|total|             user_id|\n",
+      "+-------+--------------------+-----+-----+--------------------+\n",
+      "|      2|Normal Forms and ...|  0.5|    4|6d4089e4-bde5-4a2...|\n",
+      "|      1|Normal Forms and ...| 0.25|    4|2fec1534-b41f-441...|\n",
+      "|      3|The Principles of...| 0.75|    4|8edbc8a8-4d26-429...|\n",
+      "|      2|The Principles of...|  0.5|    4|c0ee680e-8892-4e6...|\n",
+      "|      3|Introduction to B...| 0.75|    4|e4525b79-7904-405...|\n",
+      "+-------+--------------------+-----+-----+--------------------+\n",
+      "only showing top 5 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "assessmnt_dtls.show(5)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 297,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "assessmnt_dtls.registerTempTable('assessment_scores')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 298,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+----------------+\n",
+      "|   average_score|\n",
+      "+----------------+\n",
+      "|67.6142131979696|\n",
+      "+----------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#average score for Learning Git course only\n",
+    "spark.sql(\"select avg(score)*100 as average_score from assessment_scores where course = 'Learning Git'\").show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 299,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+-------------------------------+-----------------+\n",
+      "|course                         |average_score    |\n",
+      "+-------------------------------+-----------------+\n",
+      "|Learning Git                   |67.6142131979696 |\n",
+      "|Introduction to Python         |56.66666666666664|\n",
+      "|Introduction to Java 8         |87.59493670886073|\n",
+      "|Intermediate Python Programming|51.26582278481012|\n",
+      "|Learning to Program with R     |54.46428571428569|\n",
+      "+-------------------------------+-----------------+\n",
+      "only showing top 5 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "#average scores for top 5 most popular courses\n",
+    "spark.sql(\"select course, avg(score)*100 as average_score from assessment_scores group by 1 order by count(user_id) desc\").show(5, False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 300,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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\nJuQBJGHVVVddolZMg54kSZoUplLIG7Kk+2zQkyRJ6ij76EmSpEln3f1/vFS396ePPX+pbm9Q2KIn\nSZK0jN13333L5H0MepIkSeNwxx138PznP585c+aw6aabcuyxx3LOOeew3XbbMWfOHLbZZhtuv/12\n7r77bl7/+tez2WabseWWW3LqqacCcOSRR7Lbbrux8847s8suuwDwyU9+kq233prNN9+cgw46aKnX\n7KlbSZKkcfjpT3/KWmutxY9/3Jw2vvXWW9lyyy059thj2XrrrbnttttYccUV+dznPkcSLrzwQi69\n9FKe/exnc9lllwFw3nnn8dvf/pbZs2dz0kkncfnll3P22WdTVey2226cfvrpPOMZz1hqNduiJ0mS\nNA6bbbYZP/vZz3jve9/LGWecwdVXX81jH/tYtt56awBmzZrFtGnTOPPMM3nNa14DwMYbb8w666zz\nj6C36667Mnv2bABOOukkTjrpJLbcckue+tSncumll3L55Zcv1Zpt0ZMkSRqHjTbaiPPOO4+f/OQn\nvP/972fnnXde5G3MmDHjH8+rive97328+c1vXpplPoQtepIkSeNw3XXX8ahHPYrXvOY17Lfffvz6\n17/mL3/5C+eccw4At99+O/fddx877LADRx99NACXXXYZV199NU960pMetr3nPOc5fO1rX2PBggUA\n/PnPf+aGG25YqjXboidJkiadfgyHcuGFF7Lffvux3HLLscIKK3D44YdTVbz97W/nrrvuYsUVV+Tk\nk09m3333ZZ999mGzzTZj2rRpHHnkkTzykY982Pae/exnc8kll7DtttsCMHPmTL71rW+xxhprLLWa\nU1VLbWOT2dy5c2vevHn9LkOSJI3gkksu4clPfnK/y+iLkfY9yblVNXes19qiJy2GpT1Q56Dp6sCh\nkjTV2EdPkiSpowx6kiRpUpiK3c2WdJ8NepIkaeBNnz6dm266aUqFvaripptuYvr06Yu9DfvoSZKk\ngbf22mtz7bXXMn/+/H6XskxNnz6dtddee7Ffb9CTJEkDb4UVVmC99dbrdxmTjqduJUmSOsqgJ0mS\n1FEGPUmSpI4y6EmSJHWUQU+SJKmjDHqSJEkdZdCTJEnqKIOeJElSRxn0JEmSOsqgJ0mS1FEGPUmS\npI4y6EmSJHWUQU+SJKmjDHqSJEkdZdCTJEnqKIOeJElSRxn0JEmSOsqgJ0mS1FEGPUmSpI4y6EmS\n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\n",
+      "text/plain": [
+       "<matplotlib.figure.Figure at 0x7f1bcaffa198>"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "#include data visualization here \n",
+    "import pandas as pd\n",
+    "import matplotlib.pyplot as plt\n",
+    "import numpy as np\n",
+    "import matplotlib.ticker as mtick\n",
+    "\n",
+    "\n",
+    "# import seaborn as sns\n",
+    "top_5 = ['Learning Git', 'Introduction to Python', 'Introduction to Java 8', 'Intermediate Python Programming', 'Learning to Program with R']\n",
+    "df = assessmnt_dtls.toPandas()\n",
+    "df = df[df['course'].isin(top_5)] \n",
+    "avg_scores = df[['score', 'course']].groupby('course').mean()\n",
+    "ax = avg_scores.plot(kind='bar', figsize = (10,7), title = \"Average Assessment Scores Across Top 5 Courses\")\n",
+    "ax.set_xlabel('Courses')\n",
+    "ax.set_ylabel('Score')\n",
+    "yvals = ax.get_yticks()\n",
+    "ax.set_yticklabels([\"{:,.1%}\".format(y) for y in yvals], fontsize=12)\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Part 4: Write to HDFS "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Write to Hadoop HDFS in parquet format to allow us to build a batch and serving layer. Repeat this command for all dataframes. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 301,
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "AnalysisException",
+     "evalue": "'path hdfs://cloudera/tmp already exists.;'",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mPy4JJavaError\u001b[0m                             Traceback (most recent call last)",
+      "\u001b[0;32m/spark-2.2.0-bin-hadoop2.6/python/pyspark/sql/utils.py\u001b[0m in \u001b[0;36mdeco\u001b[0;34m(*a, **kw)\u001b[0m\n\u001b[1;32m     62\u001b[0m         \u001b[0;32mtry\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 63\u001b[0;31m             \u001b[0;32mreturn\u001b[0m \u001b[0mf\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0ma\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkw\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     64\u001b[0m         \u001b[0;32mexcept\u001b[0m \u001b[0mpy4j\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mprotocol\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mPy4JJavaError\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0me\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/spark-2.2.0-bin-hadoop2.6/python/lib/py4j-0.10.4-src.zip/py4j/protocol.py\u001b[0m in \u001b[0;36mget_return_value\u001b[0;34m(answer, gateway_client, target_id, name)\u001b[0m\n\u001b[1;32m    318\u001b[0m                     \u001b[0;34m\"An error occurred while calling {0}{1}{2}.\\n\"\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 319\u001b[0;31m                     format(target_id, \".\", name), value)\n\u001b[0m\u001b[1;32m    320\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mPy4JJavaError\u001b[0m: An error occurred while calling o2751.parquet.\n: org.apache.spark.sql.AnalysisException: path hdfs://cloudera/tmp already exists.;\n\tat org.apache.spark.sql.execution.datasources.InsertIntoHadoopFsRelationCommand.run(InsertIntoHadoopFsRelationCommand.scala:106)\n\tat org.apache.spark.sql.execution.command.ExecutedCommandExec.sideEffectResult$lzycompute(commands.scala:58)\n\tat org.apache.spark.sql.execution.command.ExecutedCommandExec.sideEffectResult(commands.scala:56)\n\tat org.apache.spark.sql.execution.command.ExecutedCommandExec.doExecute(commands.scala:74)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$execute$1.apply(SparkPlan.scala:117)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$execute$1.apply(SparkPlan.scala:117)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$executeQuery$1.apply(SparkPlan.scala:138)\n\tat org.apache.spark.rdd.RDDOperationScope$.withScope(RDDOperationScope.scala:151)\n\tat org.apache.spark.sql.execution.SparkPlan.executeQuery(SparkPlan.scala:135)\n\tat org.apache.spark.sql.execution.SparkPlan.execute(SparkPlan.scala:116)\n\tat org.apache.spark.sql.execution.QueryExecution.toRdd$lzycompute(QueryExecution.scala:92)\n\tat org.apache.spark.sql.execution.QueryExecution.toRdd(QueryExecution.scala:92)\n\tat org.apache.spark.sql.execution.datasources.DataSource.writeInFileFormat(DataSource.scala:438)\n\tat org.apache.spark.sql.execution.datasources.DataSource.write(DataSource.scala:474)\n\tat org.apache.spark.sql.execution.datasources.SaveIntoDataSourceCommand.run(SaveIntoDataSourceCommand.scala:48)\n\tat org.apache.spark.sql.execution.command.ExecutedCommandExec.sideEffectResult$lzycompute(commands.scala:58)\n\tat org.apache.spark.sql.execution.command.ExecutedCommandExec.sideEffectResult(commands.scala:56)\n\tat org.apache.spark.sql.execution.command.ExecutedCommandExec.doExecute(commands.scala:74)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$execute$1.apply(SparkPlan.scala:117)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$execute$1.apply(SparkPlan.scala:117)\n\tat org.apache.spark.sql.execution.SparkPlan$$anonfun$executeQuery$1.apply(SparkPlan.scala:138)\n\tat org.apache.spark.rdd.RDDOperationScope$.withScope(RDDOperationScope.scala:151)\n\tat org.apache.spark.sql.execution.SparkPlan.executeQuery(SparkPlan.scala:135)\n\tat org.apache.spark.sql.execution.SparkPlan.execute(SparkPlan.scala:116)\n\tat org.apache.spark.sql.execution.QueryExecution.toRdd$lzycompute(QueryExecution.scala:92)\n\tat org.apache.spark.sql.execution.QueryExecution.toRdd(QueryExecution.scala:92)\n\tat org.apache.spark.sql.DataFrameWriter.runCommand(DataFrameWriter.scala:610)\n\tat org.apache.spark.sql.DataFrameWriter.save(DataFrameWriter.scala:233)\n\tat org.apache.spark.sql.DataFrameWriter.save(DataFrameWriter.scala:217)\n\tat org.apache.spark.sql.DataFrameWriter.parquet(DataFrameWriter.scala:509)\n\tat sun.reflect.GeneratedMethodAccessor207.invoke(Unknown Source)\n\tat sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)\n\tat java.lang.reflect.Method.invoke(Method.java:498)\n\tat py4j.reflection.MethodInvoker.invoke(MethodInvoker.java:244)\n\tat py4j.reflection.ReflectionEngine.invoke(ReflectionEngine.java:357)\n\tat py4j.Gateway.invoke(Gateway.java:280)\n\tat py4j.commands.AbstractCommand.invokeMethod(AbstractCommand.java:132)\n\tat py4j.commands.CallCommand.execute(CallCommand.java:79)\n\tat py4j.GatewayConnection.run(GatewayConnection.java:214)\n\tat java.lang.Thread.run(Thread.java:748)\n",
+      "\nDuring handling of the above exception, another exception occurred:\n",
+      "\u001b[0;31mAnalysisException\u001b[0m                         Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-301-eeb8628a46d0>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[0;32m----> 1\u001b[0;31m \u001b[0massessments\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mwrite\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mparquet\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"/tmp/\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m",
+      "\u001b[0;32m/spark-2.2.0-bin-hadoop2.6/python/pyspark/sql/readwriter.py\u001b[0m in \u001b[0;36mparquet\u001b[0;34m(self, path, mode, partitionBy, compression)\u001b[0m\n\u001b[1;32m    689\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpartitionBy\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mpartitionBy\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    690\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_set_opts\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcompression\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0mcompression\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 691\u001b[0;31m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_jwrite\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mparquet\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mpath\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    692\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    693\u001b[0m     \u001b[0;34m@\u001b[0m\u001b[0msince\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m1.6\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/spark-2.2.0-bin-hadoop2.6/python/lib/py4j-0.10.4-src.zip/py4j/java_gateway.py\u001b[0m in \u001b[0;36m__call__\u001b[0;34m(self, *args)\u001b[0m\n\u001b[1;32m   1131\u001b[0m         \u001b[0manswer\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgateway_client\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msend_command\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcommand\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   1132\u001b[0m         return_value = get_return_value(\n\u001b[0;32m-> 1133\u001b[0;31m             answer, self.gateway_client, self.target_id, self.name)\n\u001b[0m\u001b[1;32m   1134\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m   1135\u001b[0m         \u001b[0;32mfor\u001b[0m \u001b[0mtemp_arg\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mtemp_args\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m/spark-2.2.0-bin-hadoop2.6/python/pyspark/sql/utils.py\u001b[0m in \u001b[0;36mdeco\u001b[0;34m(*a, **kw)\u001b[0m\n\u001b[1;32m     67\u001b[0m                                              e.java_exception.getStackTrace()))\n\u001b[1;32m     68\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstartswith\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m'org.apache.spark.sql.AnalysisException: '\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 69\u001b[0;31m                 \u001b[0;32mraise\u001b[0m \u001b[0mAnalysisException\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msplit\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m': '\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mstackTrace\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     70\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstartswith\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m'org.apache.spark.sql.catalyst.analysis'\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     71\u001b[0m                 \u001b[0;32mraise\u001b[0m \u001b[0mAnalysisException\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ms\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msplit\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m': '\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mstackTrace\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mAnalysisException\u001b[0m: 'path hdfs://cloudera/tmp already exists.;'"
+     ]
+    }
+   ],
+   "source": [
+    "assessments.write.parquet(\"/tmp/\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 302,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "assessments.write.mode(\"overwrite\").parquet(\"/tmp/assessments\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 303,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "assessments.write.mode(\"overwrite\").parquet(\"/tmp/extracted_assessments\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 304,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "assessments.write.mode(\"overwrite\").parquet(\"/tmp/assessmnt_dtls\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Part 5: Linux Commands - Tear Down"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "##### check hadoop hdfs writes\n",
+    "docker-compose exec cloudera hadoop fs -ls /tmp/\n",
+    "\n",
+    "docker-compose exec cloudera hadoop fs -ls /tmp/assessments/\n",
+    "\n",
+    "docker-compose exec cloudera hadoop fs -ls /tmp/extracted_assessments/\n",
+    "\n",
+    "docker-compose exec cloudera hadoop fs -ls /tmp/assessmnt_dtls\n",
+    "\n",
+    "##### tear down cluster\n",
+    "docker-compose down"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
