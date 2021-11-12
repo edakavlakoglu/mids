@@ -1,7 +1,7 @@
 # mids
 # Projects and Assignments from UCBerkeley's Information and Data Science Master's Program
 
-Welcome! My name is Eda Kavlakoglu, and this is my data science portfolio from my graduate program in Information and Data Science at the University of California, Berkeley. The work in this repo are from the following classes that I've taken thus far: 
+Welcome! My name is Eda Kavlakoglu, and this is my data science portfolio from my graduate program at the University of California, Berkeley. The work in this repo are from the following classes that I've taken thus far: 
 
 # W200: Introduction to Data Science Programming
 
